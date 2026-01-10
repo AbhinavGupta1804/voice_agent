@@ -148,3 +148,21 @@ wheels/
 .env
 
 localDocs/
+
+.vscode 
+agency_backend/.venv
+agency_backend/.env
+agency_frontend/node_modules
+agency_frontend/.env
+hospitality_backend/node_modules
+hospitality_backend/.env
+hospitality_frontend/node_modules
+hospitality_frontend/.env
+
+
+
+
+
+
+
+

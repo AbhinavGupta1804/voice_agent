@@ -1,0 +1,17 @@
+[project]
+name = "hospitality-backend"
+version = "0.1.0"
+description = "Inbound call handling system for restaurants, hotels, and bars"
+requires-python = ">=3.10"
+dependencies = [
+    "asyncpg>=0.29.0",
+    "fastapi>=0.118.0",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.1.1",
+    "twilio>=9.8.3",
+    "uvicorn>=0.37.0",
+    "websockets>=15.0.1",
+    "openai>=1.51.0",
+    "pydantic>=2.0.0",
+]
+

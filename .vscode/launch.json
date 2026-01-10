@@ -1,0 +1,86 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "FastAPI Server",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "main:app",
+                "--host", "127.0.0.1",
+                "--port", "8000",
+                "--reload"
+            ],
+            "cwd": "${workspaceFolder}/app",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/app"
+            },
+            "envFile": "${workspaceFolder}/.env",
+            "jinja": true,
+            "justMyCode": false
+        },
+        {
+            "name": "FastAPI Server (No Reload)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "main:app",
+                "--host", "127.0.0.1",
+                "--port", "8001"
+            ],
+            "cwd": "${workspaceFolder}/app",
+            "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/app"
+            },
+            "envFile": "${workspaceFolder}/.env",
+            "jinja": true,
+            "justMyCode": false
+        },
+        {
+            "name": "Hospitality Backend (FastAPI)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "app.main:app",
+                "--host", "127.0.0.1",
+                "--port", "8000",
+                "--reload"
+            ],
+            "cwd": "${workspaceFolder}/hospitality_backend/app",
+            "python": "${workspaceFolder}/hospitality_backend/.venv/Scripts/python.exe",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/hospitality_backend"
+            },
+            "envFile": "${workspaceFolder}/hospitality_backend/.env",
+            "jinja": true,
+            "justMyCode": false
+        },
+        {
+            "name": "Hospitality Backend (No Reload)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "main:app",
+                "--host", "127.0.0.1",
+                "--port", "8000"
+            ],
+            "cwd": "${workspaceFolder}/hospitality_backend",
+            "python": "${workspaceFolder}/hospitality_backend/.venv/Scripts/python.exe",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/hospitality_backend"
+            },
+            "envFile": "${workspaceFolder}/hospitality_backend/.env",
+            "jinja": true,
+            "justMyCode": false
+        }
+    ]
+}
