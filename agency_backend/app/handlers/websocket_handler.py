@@ -116,8 +116,7 @@ class OutboundWebSocketHandler:
             name = "there"
 
         return (
-            f"Hey {name}! Umm, this is Monica from DevFusion. Hope you are doing well today "
-            "So we found out that you're looking for a website development , is that right ?"
+            f"“Hey {name}, मैं Monica बोल रही हूँ TravelBuddy से.Um... उम्मीद है आप ठीक होंगे.मैंने देखा कि आप हाल ही में travel options explore कर रहे थे, तो बस एक quick check-in के लिए कॉल किया.”"
         )
 
     def _build_dynamic_variables(self) -> dict:

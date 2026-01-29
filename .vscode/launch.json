@@ -81,6 +81,45 @@
             "envFile": "${workspaceFolder}/hospitality_backend/.env",
             "jinja": true,
             "justMyCode": false
+        },
+        {
+            "name": "Agency Backend (FastAPI)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "app.main:app",
+                "--host", "127.0.0.1",
+                "--port", "8000",
+                "--reload"
+            ],
+            "cwd": "${workspaceFolder}/agency_backend/app",
+            "python": "${workspaceFolder}/agency_backend/.venv/Scripts/python.exe",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/agency_backend"
+            },
+            "envFile": "${workspaceFolder}/agency_backend/.env",
+            "jinja": true,
+            "justMyCode": false
+        },
+        {
+            "name": "Agency Backend (No Reload)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "app.main:app",
+                "--host", "127.0.0.1",
+                "--port", "8000"
+            ],
+            "cwd": "${workspaceFolder}/agency_backend/app",
+            "python": "${workspaceFolder}/agency_backend/.venv/Scripts/python.exe",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/agency_backend"
+            },
+            "envFile": "${workspaceFolder}/agency_backend/.env",
+            "jinja": true,
+            "justMyCode": false
         }
     ]
 }

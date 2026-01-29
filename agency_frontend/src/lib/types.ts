@@ -27,6 +27,7 @@ export interface CallRecord {
   notification_preferences: NotificationPreferences | null;
   phone_number: string | null;
   recording_url: string | null;
+  call_type: "inbound" | "outbound" | null;
 }
 
 export interface PaginatedCallsResponse {

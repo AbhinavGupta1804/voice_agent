@@ -16,6 +16,8 @@ import {
   Volume2,
   VolumeX,
   Download,
+  ArrowDownLeft,
+  ArrowUpCircle,
 } from "lucide-react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import {
@@ -242,6 +244,11 @@ const sentimentColors = {
   negative: "bg-destructive/10 text-destructive",
 };
 
+const callTypeColors = {
+  inbound: "bg-blue-500/10 text-blue-600 border-blue-500/20",
+  outbound: "bg-green-500/10 text-green-600 border-green-500/20",
+};
+
 export default function CallHistory() {
   const [page, setPage] = useState(1);
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
@@ -462,10 +469,28 @@ export default function CallHistory() {
                       <User className="h-6 w-6 text-muted-foreground" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-medium text-card-foreground truncate">
                           {call.client_name}
                         </p>
+                        {call.call_type && (
+                          <Badge
+                            variant="outline"
+                            className={callTypeColors[call.call_type]}
+                          >
+                            {call.call_type === "inbound" ? (
+                              <>
+                                <ArrowDownLeft className="h-3 w-3 mr-1" />
+                                Incoming
+                              </>
+                            ) : (
+                              <>
+                                <ArrowUpCircle className="h-3 w-3 mr-1" />
+                                Outgoing
+                              </>
+                            )}
+                          </Badge>
+                        )}
                         <Badge
                           variant="outline"
                           className={statusColors[status]}
@@ -553,6 +578,24 @@ export default function CallHistory() {
                 <div className="space-y-6 pr-4">
                   {/* Call Info */}
                   <div className="flex flex-wrap gap-3">
+                    {selectedCall.call_type && (
+                      <Badge
+                        variant="outline"
+                        className={callTypeColors[selectedCall.call_type]}
+                      >
+                        {selectedCall.call_type === "inbound" ? (
+                          <>
+                            <ArrowDownLeft className="h-3 w-3 mr-1" />
+                            Incoming
+                          </>
+                        ) : (
+                          <>
+                            <ArrowUpCircle className="h-3 w-3 mr-1" />
+                            Outgoing
+                          </>
+                        )}
+                      </Badge>
+                    )}
                     <Badge
                       variant="outline"
                       className={statusColors[getCallStatus(selectedCall)]}

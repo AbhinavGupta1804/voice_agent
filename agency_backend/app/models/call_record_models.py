@@ -83,7 +83,7 @@ class CallCompletePayload(BaseModel):
 
     call_id: str = Field(..., min_length=1, max_length=128)
     client_name: str = Field(..., min_length=1, max_length=255)
-    transcript: str = Field(..., min_length=1)
+    transcript: str = Field(default="", min_length=0)
     insights: InsightModel
     conversion_status: bool
     sentiment: Optional[str] = Field(default=None, description="Call sentiment: positive | neutral | negative")
@@ -93,6 +93,7 @@ class CallCompletePayload(BaseModel):
     notification_preferences: Optional[NotificationPreferences] = Field(default=None, description="User notification preferences")
     phone_number: Optional[str] = Field(default=None, description="Phone number used for the call")
     recording_url: Optional[str] = Field(default=None, description="URL to the call recording audio")
+    call_type: Optional[str] = Field(default=None, description="Type of call: 'inbound' or 'outbound'")
 
     model_config = ConfigDict(extra="ignore")
 

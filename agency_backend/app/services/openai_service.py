@@ -23,6 +23,52 @@ class OpenAIService:
         return cls._client
 
     @classmethod
+    def detect_call_type_from_transcript(cls, transcript: str) -> Optional[str]:
+        """
+        Detect if a call is inbound or outbound based on the agent's first message in the transcript.
+        
+        Logic:
+        - Inbound calls: Agent greets with "Hey Sir" (doesn't know user's name)
+        - Outbound calls: Agent greets with "Hey {name}" (knows user's name)
+        
+        Args:
+            transcript: The call transcript text
+            
+        Returns:
+            "inbound", "outbound", or None if cannot determine
+        """
+        if not transcript:
+            return None
+        
+        # Look for the first agent message in the transcript
+        # Transcript format is typically: "Agent: Hey {name}!..." or "Agent: Hey Sir!..."
+        lines = transcript.split('\n')
+        for line in lines:
+            line_lower = line.lower().strip()
+            # Check for agent messages (could be "Agent:", "agent:", etc.)
+            if line_lower.startswith('agent:'):
+                message = line[len('agent:'):].strip()
+                message_lower = message.lower()
+                
+                # Check for inbound pattern: "Hey Sir" or variations
+                if message_lower.startswith('hey sir') or message_lower.startswith('hey, sir'):
+                    logger.info("[OpenAI] Detected call_type='inbound' from transcript (agent said 'Hey Sir')")
+                    return "inbound"
+                
+                # Check for outbound pattern: "Hey {name}" where name is not "Sir"
+                if message_lower.startswith('hey '):
+                    # Extract the word after "Hey"
+                    words = message_lower.split()
+                    if len(words) > 1:
+                        second_word = words[1].strip(',!?')
+                        if second_word and second_word != 'sir' and second_word != 'there':
+                            logger.info(f"[OpenAI] Detected call_type='outbound' from transcript (agent said 'Hey {second_word}')")
+                            return "outbound"
+        
+        logger.warning("[OpenAI] Could not detect call_type from transcript")
+        return None
+    
+    @classmethod
     async def analyze_call_structured(
         cls,
         transcript: str,
@@ -51,11 +97,13 @@ class OpenAIService:
             - notify_whatsapp: boolean (should we send a follow-up WhatsApp?)
             - email_address: string or null (only if notify_email is true; otherwise null)
             - whatsapp_number: string or null (only if notify_whatsapp is true; otherwise null)
+            - user_name: string or null (extract the user's actual name from the transcript. Look for when the user introduces themselves or when the agent asks for their name. Return null if name cannot be determined)
 
             Rules:
             - Output only JSON, no extra text.
             - If uncertain, set conversion_status=false and sentiment="neutral".
             - If you do not know contact info, set it to null and set notify_* to false.
+            - Extract user_name from the transcript when the user explicitly states their name or when asked by the agent.
             """
 
         user_prompt = f"Transcript:\n{transcript}"
@@ -88,6 +136,7 @@ class OpenAIService:
                 "notify_whatsapp": bool(data.get("notify_whatsapp", False)),
                 "email_address": data.get("email_address"),
                 "whatsapp_number": data.get("whatsapp_number"),
+                "user_name": data.get("user_name"),  # Extracted user name from transcript
             }
 
             if result["sentiment"] not in {"positive", "neutral", "negative"}:

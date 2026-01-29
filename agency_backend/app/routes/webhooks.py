@@ -143,20 +143,48 @@ def register_webhook_routes(app):
                 conversation_id = raw_data['data']['conversation_id']
                 metadata = raw_data['data']['metadata']
                 
-                client_name = metadata.get("client_name", "Unknown")
+                # Get call_type, client_name, and phone_number from stored call metadata FIRST
+                call_type = await CallRecordService.get_call_type_from_conversation(conversation_id)
+                client_name = await CallRecordService.get_client_name_from_conversation(conversation_id) or "Unknown"
+                phone_number = await CallRecordService.get_phone_number_from_conversation(conversation_id) or ""
+                
+                # If call_type is still None, try to infer it from client_name
+                if not call_type:
+                    if client_name == "Customer":
+                        call_type = "inbound"
+                        logger.info(f"[Webhook] Inferred call_type='inbound' from client_name='Customer'")
+                    elif client_name != "Unknown":
+                        # If we have a real client name but no call_type, it's likely outbound
+                        call_type = "outbound"
+                        logger.info(f"[Webhook] Inferred call_type='outbound' from client_name='{client_name}'")
+                
+                # Final fallback: Detect call_type from transcript (agent's first message pattern)
+                # Inbound: "Hey Sir" | Outbound: "Hey {name}"
+                if not call_type and transcript_text.strip():
+                    detected_call_type = OpenAIService.detect_call_type_from_transcript(transcript_text.strip())
+                    if detected_call_type:
+                        call_type = detected_call_type
+                        logger.info(f"[Webhook] Detected call_type='{call_type}' from transcript analysis")
+                
+                logger.info(f"[Webhook] Retrieved metadata - call_type={call_type}, client_name={client_name}, phone_number={phone_number}")
+                
+                # Fallback: Try to get client_name from webhook payload metadata
+                if client_name == "Unknown":
+                    client_name = metadata.get("client_name", "Unknown")
+                
+                # Fallback: Try to get from webhook payload dynamic variables (legacy support)
+                if client_name == "Unknown" and 'conversation_initiation_client_data' in raw_data.get('data', {}):
+                    init_data = raw_data['data']['conversation_initiation_client_data']
+                    if isinstance(init_data, dict):
+                        dynamic_vars = init_data.get('dynamic_variables', {})
+                        if isinstance(dynamic_vars, dict):
+                            client_name = dynamic_vars.get('client_name', 'Unknown')
+                            logger.info(f"[Webhook] Fallback: Extracted client name from payload: {client_name}")
+                
                 if client_name != "Unknown":
-                    logger.info(f"[Webhook] Using stored client name: {client_name}")
+                    logger.info(f"[Webhook] Using client name: {client_name}")
                 else:
-                    logger.warning(f"[Webhook] No stored metadata found for conversation_id={conversation_id}")
-                    
-                    # Fallback: Try to get from webhook payload (legacy support)
-                    if 'conversation_initiation_client_data' in raw_data.get('data', {}):
-                        init_data = raw_data['data']['conversation_initiation_client_data']
-                        if isinstance(init_data, dict):
-                            dynamic_vars = init_data.get('dynamic_variables', {})
-                            if isinstance(dynamic_vars, dict):
-                                client_name = dynamic_vars.get('client_name', 'Unknown')
-                                logger.info(f"[Webhook] Fallback: Extracted client name from payload: {client_name}")
+                    logger.warning(f"[Webhook] No client name found for conversation_id={conversation_id}")
                 
                 # Extract topics from summary if available
                 topics = []
@@ -189,17 +217,15 @@ def register_webhook_routes(app):
                     conversion_status=conversion_status,
                     sentiment=None,
                     timestamp=datetime.fromtimestamp(raw_data['event_timestamp'], tz=timezone.utc),
-                    recording_url=recording_url
+                    recording_url=recording_url,
+                    call_type=call_type
                 )
                 
-                # Get the phone number from multiple sources with fallbacks
-                phone_number = metadata.get("phone_number", "")
-                
-                # Fallback 1: Try to get from stored call metadata using conversation_id
+                # Fallback 2: Try to get phone_number from webhook payload dynamic variables if not already retrieved
                 if not phone_number:
-                    phone_number = await CallRecordService.get_phone_number_from_conversation(conversation_id) or ""
+                    phone_number = metadata.get("phone_number", "")
                 
-                # Fallback 2: Try to get from webhook payload dynamic variables
+                # Fallback 3: Try to get from webhook payload dynamic variables
                 if not phone_number and 'conversation_initiation_client_data' in raw_data.get('data', {}):
                     init_data = raw_data['data']['conversation_initiation_client_data']
                     if isinstance(init_data, dict):
@@ -223,6 +249,15 @@ def register_webhook_routes(app):
                     payload.conversion_status = ai_result.get("conversion_status", False)
                     payload.sentiment = ai_result.get("sentiment", "neutral")
                     payload.phone_number = phone_number
+                    
+                    # For inbound calls, extract user name from transcript if client_name is still "Customer" or "Unknown"
+                    extracted_user_name = ai_result.get("user_name")
+                    if extracted_user_name and call_type == "inbound":
+                        # Only update if we still have placeholder names
+                        if client_name in ["Customer", "Unknown"]:
+                            client_name = extracted_user_name
+                            payload.client_name = extracted_user_name
+                            logger.info(f"[Webhook] Extracted user name from transcript for inbound call: {extracted_user_name}")
 
                     # Extract WhatsApp number and validate it
                     extracted_whatsapp_number = ai_result.get("whatsapp_number")

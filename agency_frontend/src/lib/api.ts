@@ -71,6 +71,7 @@ export async function fetchCall(callId: string): Promise<CallRecord> {
 export async function initiateCall(
   request: OutboundCallRequest
 ): Promise<InitiateCallResponse> {
+  console.log("Initiating call with request:", request);
   const response = await fetch(`${API_BASE_URL}/api/initiate_call`, {
     method: 'POST',
     headers: {
@@ -78,6 +79,7 @@ export async function initiateCall(
     },
     body: JSON.stringify(request),
   });
+  console.log("Response:", response);
   return handleResponse<InitiateCallResponse>(response);
 }
 

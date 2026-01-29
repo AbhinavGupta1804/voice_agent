@@ -100,7 +100,8 @@ def register_dashboard_routes(app):
             await CallRecordService.store_call_metadata(
                 call_sid=call_sid,
                 client_name=request_data.client_name,
-                phone_number=request_data.number
+                phone_number=request_data.number,
+                call_type="outbound"
             )
 
             payload = {
@@ -169,7 +170,8 @@ def register_dashboard_routes(app):
                     await CallRecordService.store_call_metadata(
                         call_sid=call_sid,
                         client_name=result["client_name"],
-                        phone_number=result["to_number"]
+                        phone_number=result["to_number"],
+                        call_type="outbound"
                     )
                     
                     # Broadcast to dashboard
@@ -310,7 +312,8 @@ def register_dashboard_routes(app):
                     await CallRecordService.store_call_metadata(
                         call_sid=call_sid,
                         client_name=result["client_name"],
-                        phone_number=result["to_number"]
+                        phone_number=result["to_number"],
+                        call_type="outbound"
                     )
                     
                     # Broadcast to dashboard

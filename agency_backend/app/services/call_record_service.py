@@ -72,13 +72,14 @@ class CallRecordService:
     _conversation_to_call: Dict[str, str] = {}
 
     @staticmethod
-    async def store_call_metadata(call_sid: str, client_name: str, phone_number: str):
-        """Store client name and phone number for a call."""
+    async def store_call_metadata(call_sid: str, client_name: str, phone_number: str, call_type: str = None):
+        """Store client name, phone number, and call type for a call."""
         CallRecordService._call_metadata[call_sid] = {
             "client_name": client_name,
-            "phone_number": phone_number
+            "phone_number": phone_number,
+            "call_type": call_type
         }
-        logger.info(f"[CallRecord] Stored metadata for call_sid={call_sid}: {client_name}")
+        logger.info(f"[CallRecord] Stored metadata for call_sid={call_sid}: {client_name}, call_type={call_type}")
 
     @staticmethod
     async def link_conversation_to_call(conversation_id: str, call_sid: str):
@@ -97,6 +98,30 @@ class CallRecordService:
                 logger.info(f"[CallRecord] Retrieved phone number from metadata for conversation_id={conversation_id}: {phone_number}")
                 return phone_number
         logger.warning(f"[CallRecord] No phone number found in metadata for conversation_id={conversation_id}")
+        return None
+    
+    @staticmethod
+    async def get_call_type_from_conversation(conversation_id: str) -> Optional[str]:
+        """Retrieve call_type from call metadata using conversation_id."""
+        call_sid = CallRecordService._conversation_to_call.get(conversation_id)
+        if call_sid:
+            metadata = CallRecordService._call_metadata.get(call_sid, {})
+            call_type = metadata.get("call_type")
+            if call_type:
+                logger.info(f"[CallRecord] Retrieved call_type from metadata for conversation_id={conversation_id}: {call_type}")
+                return call_type
+        return None
+    
+    @staticmethod
+    async def get_client_name_from_conversation(conversation_id: str) -> Optional[str]:
+        """Retrieve client_name from call metadata using conversation_id."""
+        call_sid = CallRecordService._conversation_to_call.get(conversation_id)
+        if call_sid:
+            metadata = CallRecordService._call_metadata.get(call_sid, {})
+            client_name = metadata.get("client_name")
+            if client_name:
+                logger.info(f"[CallRecord] Retrieved client_name from metadata for conversation_id={conversation_id}: {client_name}")
+                return client_name
         return None
 
     @staticmethod
@@ -320,8 +345,8 @@ class CallRecordService:
                         result = await conn.execute("""
                         INSERT INTO calls (
                             call_id, client_name, phone_number, transcript, summary,
-                            follow_up_date, conversion_status, duration_sec, call_timestamp, recording_url, sentiment
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                            follow_up_date, conversion_status, duration_sec, call_timestamp, recording_url, sentiment, call_type
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                             ON CONFLICT (call_id) DO UPDATE SET
                                 client_name = EXCLUDED.client_name,
                                 phone_number = EXCLUDED.phone_number,
@@ -333,6 +358,11 @@ class CallRecordService:
                                 call_timestamp = EXCLUDED.call_timestamp,
                                 recording_url = COALESCE(EXCLUDED.recording_url, calls.recording_url),
                                 sentiment = EXCLUDED.sentiment,
+                                call_type = CASE 
+                                    WHEN EXCLUDED.call_type IS NOT NULL THEN EXCLUDED.call_type
+                                    WHEN calls.call_type IS NOT NULL THEN calls.call_type
+                                    ELSE NULL
+                                END,
                                 updated_at = NOW()
                         """,
                             record["call_id"],
@@ -346,7 +376,8 @@ class CallRecordService:
                             record["insights"]["duration_sec"],
                             timestamp,
                             record.get("recording_url"),  # Will be None from transcript webhook, preserved by COALESCE
-                            record.get("sentiment")
+                            record.get("sentiment"),
+                            record.get("call_type")  # call_type: 'inbound' or 'outbound'
                         )
                         logger.info(f"[CallRecord] Insert/update result: {result}")
                         
@@ -452,7 +483,7 @@ class CallRecordService:
                     LEFT JOIN notification_preferences np ON c.call_id = np.call_id
                     GROUP BY c.id, c.call_id, c.client_name, c.phone_number, c.transcript, 
                              c.summary, c.follow_up_date, c.conversion_status, c.duration_sec, 
-                             c.call_timestamp, c.recording_url, c.sentiment, c.created_at, c.updated_at,
+                             c.call_timestamp, c.recording_url, c.sentiment, c.call_type, c.created_at, c.updated_at,
                              np.notify_email, np.notify_whatsapp, np.email_address, np.whatsapp_number,
                              np.email_sent, np.whatsapp_sent
                     ORDER BY c.call_timestamp DESC

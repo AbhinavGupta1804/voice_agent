@@ -12,7 +12,14 @@ from fastapi.responses import JSONResponse, FileResponse
 
 from .config import Config
 from .db import init_postgres, close_postgres
-from .routes import register_outbound_routes, register_webhook_routes, register_dashboard_routes, register_analytics_routes
+from .routes import (
+    register_outbound_routes,
+    register_webhook_routes,
+    register_dashboard_routes,
+    register_analytics_routes,
+    register_inbound_routes,
+    register_groq_proxy_routes,
+)
 
 # Audio recordings are now stored in Cloudflare R2, not locally
 
@@ -198,9 +205,11 @@ async def test_db_write():
 
 # Register route handlers
 register_outbound_routes(app)
+register_inbound_routes(app)
 register_dashboard_routes(app)
 register_webhook_routes(app)
 register_analytics_routes(app)
+register_groq_proxy_routes(app)
 
 
 if __name__ == "__main__":
