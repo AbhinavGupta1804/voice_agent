@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, FileResponse
 
 from .config import Config
 from .db import init_postgres, close_postgres
+from .services.scheduler_service import start_scheduler, stop_scheduler
 from .routes import (
     register_outbound_routes,
     register_webhook_routes,
@@ -54,10 +55,18 @@ async def lifespan(app: FastAPI):
         # Don't raise - let the server start even if DB fails initially
         # The pool will try to reconnect on first query
     
+    # Start the follow-up scheduler
+    try:
+        await start_scheduler()
+        logger.info("[Server] Follow-up scheduler started successfully")
+    except Exception as e:
+        logger.error(f"[Server] Scheduler initialization failed: {e}", exc_info=True)
+    
     try:
         yield
     finally:
-        logger.info("[Server] Shutting down - closing database connection pool...")
+        logger.info("[Server] Shutting down...")
+        await stop_scheduler()
         await close_postgres()
         logger.info("[Server] Cleanup complete")
 

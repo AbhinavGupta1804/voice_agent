@@ -83,7 +83,10 @@ class OpenAIService:
           "notify_email": bool,
           "notify_whatsapp": bool,
           "email_address": str | null,
-          "whatsapp_number": str | null
+          "whatsapp_number": str | null,
+          "user_name": str | null,
+          "follow_up_required": bool,
+          "follow_up_datetime": str | null
         }
         """
         client = cls._get_client()
@@ -98,15 +101,22 @@ class OpenAIService:
             - email_address: string or null (only if notify_email is true; otherwise null)
             - whatsapp_number: string or null (only if notify_whatsapp is true; otherwise null)
             - user_name: string or null (extract the user's actual name from the transcript. Look for when the user introduces themselves or when the agent asks for their name. Return null if name cannot be determined)
+            - follow_up_required: boolean (true ONLY if customer explicitly asks to be called back later, says they are busy, asks to reschedule, or similar scenarios. false otherwise)
+            - follow_up_datetime: string or null (ISO 8601 format like "2025-02-03T15:00:00+05:30" - only if follow_up_required is true. Calculate based on current datetime and what customer said like "call me in 2 days", "call me tomorrow at 3 PM", "call after 2 hours")
 
             Rules:
             - Output only JSON, no extra text.
             - If uncertain, set conversion_status=false and sentiment="neutral".
             - If you do not know contact info, set it to null and set notify_* to false.
             - Extract user_name from the transcript when the user explicitly states their name or when asked by the agent.
+            - Set follow_up_required=true ONLY when customer explicitly requests a callback (e.g., "call me later", "I'm busy right now", "call me tomorrow"). Do NOT set it true for general follow-ups.
+            - For follow_up_datetime, use the current datetime provided and calculate the exact datetime based on customer's request.
             """
 
-        user_prompt = f"Transcript:\n{transcript}"
+        from datetime import datetime, timezone
+        current_dt = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        
+        user_prompt = f"Transcript:\n{transcript}\n\nCurrent datetime (UTC): {current_dt}"
         if default_phone_number:
             user_prompt += f"\nDefault phone number (if needed): {default_phone_number}"
 
@@ -137,6 +147,8 @@ class OpenAIService:
                 "email_address": data.get("email_address"),
                 "whatsapp_number": data.get("whatsapp_number"),
                 "user_name": data.get("user_name"),  # Extracted user name from transcript
+                "follow_up_required": bool(data.get("follow_up_required", False)),
+                "follow_up_datetime": data.get("follow_up_datetime"),
             }
 
             if result["sentiment"] not in {"positive", "neutral", "negative"}:
@@ -149,6 +161,7 @@ class OpenAIService:
                 result["notify_email"],
                 result["notify_whatsapp"],
             )
+            logger.info(f"[OpenAI DEBUG] follow_up_required={result['follow_up_required']}, follow_up_datetime={result['follow_up_datetime']}")
             return result
 
         except Exception as exc:  # pragma: no cover
@@ -161,5 +174,8 @@ class OpenAIService:
                 "notify_whatsapp": False,
                 "email_address": None,
                 "whatsapp_number": None,
+                "user_name": None,
+                "follow_up_required": False,
+                "follow_up_datetime": None,
             }
 

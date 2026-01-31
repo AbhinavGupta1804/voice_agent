@@ -17,6 +17,7 @@ from ..models import (
     NotificationPreferences
 )
 from ..services.call_record_service import CallRecordService
+from ..services.follow_up_service import ScheduledFollowUpService
 from ..services.openai_service import OpenAIService
 from ..services.email_service import EmailService
 from ..services.whatsapp_service import WhatsAppService
@@ -286,6 +287,37 @@ def register_webhook_routes(app):
                         payload.notification_preferences.notify_email,
                         payload.notification_preferences.notify_whatsapp,
                     )
+                    
+                    # Store follow_up_datetime in payload (for calls table backward compatibility)
+                    if ai_result.get("follow_up_datetime"):
+                        try:
+                            follow_up_dt = datetime.fromisoformat(ai_result["follow_up_datetime"].replace('Z', '+00:00'))
+                            payload.follow_up_date = follow_up_dt.date().isoformat()
+                        except Exception:
+                            payload.follow_up_date = None
+                    
+                    # Debug log for follow-up check
+                    logger.info(f"[Webhook DEBUG] ai_result follow_up check: required={ai_result.get('follow_up_required')}, datetime={ai_result.get('follow_up_datetime')}")
+                    
+                    # Schedule follow-up call if customer requested callback
+                    if ai_result.get("follow_up_required") and ai_result.get("follow_up_datetime"):
+                        try:
+                            follow_up_dt = datetime.fromisoformat(ai_result["follow_up_datetime"].replace('Z', '+00:00'))
+                            logger.info(f"[Webhook DEBUG] Attempting to create follow-up: call_id={payload.call_id}, phone={phone_number}, scheduled_at={follow_up_dt}")
+                            await ScheduledFollowUpService.create_follow_up(
+                                call_id=payload.call_id,
+                                phone_number=phone_number,
+                                client_name=client_name,
+                                scheduled_at=follow_up_dt,
+                                context={
+                                    "summary": payload.summary,
+                                    "original_call_date": datetime.now(timezone.utc).isoformat(),
+                                    "call_type": call_type
+                                }
+                            )
+                            logger.info(f"[Webhook] Scheduled follow-up call for {follow_up_dt}")
+                        except Exception as follow_up_error:
+                            logger.error(f"[Webhook] Failed to schedule follow-up: {follow_up_error}")
                 except Exception as ai_error:
                     logger.warning(f"[Webhook] OpenAI structured analysis failed, using defaults: {ai_error}")
                 
