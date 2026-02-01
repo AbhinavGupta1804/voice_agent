@@ -18,35 +18,47 @@ class TwilioService:
         Config.validate_twilio_config()
         self.client = TwilioClient(Config.TWILIO_ACCOUNT_SID, Config.TWILIO_AUTH_TOKEN)
     
-    async def initiate_call(self, to_number: str, twiml_url: str) -> dict:
+    async def initiate_call(
+        self,
+        to_number: str,
+        twiml_url: str,
+        status_callback: str = None,
+        status_callback_events: list = None,
+    ) -> dict:
         """
         Initiate an outbound call using Twilio.
-        
+
         Args:
             to_number: Phone number to call
             twiml_url: URL for TwiML instructions
-            
+            status_callback: Optional URL for call status events (completed, no-answer, etc.)
+            status_callback_events: Optional list of events, e.g. ['completed']
+
         Returns:
             dict: Call information including call SID
-            
-        Raises:
-            Exception: If the call fails to initiate
         """
         try:
+            kwargs = {
+                "from_": Config.TWILIO_PHONE_NUMBER,
+                "to": to_number,
+                "url": twiml_url,
+            }
+            if status_callback:
+                kwargs["status_callback"] = status_callback
+            if status_callback_events:
+                kwargs["status_callback_event"] = status_callback_events
+
             call = await asyncio.to_thread(
                 self.client.calls.create,
-                from_=Config.TWILIO_PHONE_NUMBER,
-                to=to_number,
-                url=twiml_url,
+                **kwargs,
             )
-            
+
             return {
                 "call_sid": call.sid,
                 "to": to_number,
                 "from": Config.TWILIO_PHONE_NUMBER,
-                "status": call.status
+                "status": call.status,
             }
-        
         except Exception as e:
             logger.error(f"[Twilio] Error initiating call: {e}")
             raise
@@ -174,4 +186,35 @@ class TwilioService:
         
         logger.info(f"[Twilio] Completed {total} sequential calls: {sum(1 for r in results if r['success'])} successful, {sum(1 for r in results if not r['success'])} failed")
         return results
+
+    async def send_sms(self, to_number: str, body: str) -> dict:
+        """
+        Send an SMS via Twilio.
+
+        Args:
+            to_number: Recipient phone number in E.164 format.
+            body: Message body (up to 1600 chars for concatenated SMS).
+
+        Returns:
+            dict: { "success": bool, "message_sid": str | None, "error": str | None }
+        """
+        try:
+            message = await asyncio.to_thread(
+                self.client.messages.create,
+                from_=Config.TWILIO_PHONE_NUMBER,
+                to=to_number,
+                body=body[:1600],
+            )
+            return {
+                "success": True,
+                "message_sid": message.sid,
+                "status": message.status,
+            }
+        except Exception as e:
+            logger.error(f"[Twilio] SMS failed to {to_number}: {e}")
+            return {
+                "success": False,
+                "message_sid": None,
+                "error": str(e),
+            }
 

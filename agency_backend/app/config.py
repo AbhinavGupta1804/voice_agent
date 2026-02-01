@@ -14,9 +14,6 @@ class Config:
     ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID")
     ELEVENLABS_WEBHOOK_SECRET = os.getenv("ELEVENLABS_WEBHOOK_SECRET", "")
     
-    # Google Gemini Configuration
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    
     # Groq Configuration
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -54,6 +51,9 @@ class Config:
     # Server Configuration
     PORT = int(os.getenv("PORT", "8000"))
     NGROK_URL = os.getenv("NGROK_URL", "")
+
+    # Follow-up: delay (minutes) before retrying when user didn't pick up original call
+    FOLLOW_UP_NO_ANSWER_DELAY_MINUTES = int(os.getenv("FOLLOW_UP_NO_ANSWER_DELAY_MINUTES", "15"))
 
     # Brochure/Media Configuration
     BROCHURE_FILE_PATH = os.getenv("BROCHURE_FILE_PATH", "docs/FileSend.pdf")

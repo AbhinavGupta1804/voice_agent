@@ -118,14 +118,14 @@ class WhatsAppService:
                 await cls._send_interactive_buttons(
                     client, whatsapp_from, whatsapp_to, follow_up_date, call_id
                 )
-            
-                return {
+
+            return {
                 "success": True,
                 "message_sid": message.sid,
                 "to": to_number,
                 "status": message.status
             }
-            
+
         except Exception as e:
             logger.error(f"[WhatsApp] Failed to send message to {to_number}: {e}")
             return {

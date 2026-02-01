@@ -165,7 +165,34 @@ If you have any questions, please don't hesitate to call us back.
                 "error": str(e),
                 "to": to_email
             }
-    
+
+    @classmethod
+    async def send_simple_email(cls, to_email: str, body: str, subject: Optional[str] = None) -> dict:
+        """
+        Send a simple text/HTML email (e.g. reply from dashboard chat).
+        Returns dict with success, error, to.
+        """
+        try:
+            gmail_user = Config.GMAIL_USER
+            gmail_password = Config.GMAIL_APP_PASSWORD
+            from_email = Config.GMAIL_FROM_EMAIL
+            if not gmail_user or not gmail_password:
+                raise ValueError("Gmail SMTP credentials are not configured")
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject or "Message from DevFuzzion Voice Assistant"
+            msg["From"] = from_email
+            msg["To"] = to_email
+            msg.attach(MIMEText(body, "plain"))
+            with smtplib.SMTP(cls.SMTP_SERVER, cls.SMTP_PORT) as server:
+                server.starttls()
+                server.login(gmail_user, gmail_password)
+                server.sendmail(from_email, to_email, msg.as_string())
+            logger.info(f"[EmailService] Simple email sent to {to_email}")
+            return {"success": True, "to": to_email}
+        except Exception as e:
+            logger.error(f"[EmailService] Failed to send simple email to {to_email}: {e}")
+            return {"success": False, "error": str(e), "to": to_email}
+
     @classmethod
     def _attach_brochure(cls, msg: MIMEMultipart) -> bool:
         """
