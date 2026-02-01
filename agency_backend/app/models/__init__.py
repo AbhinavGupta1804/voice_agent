@@ -9,6 +9,16 @@ from .call_record_models import (
     InsightModel,
     NotificationPreferences,
 )
+from .follow_up_models import (
+    ScheduledFollowUpResponse,
+    PaginatedFollowUpsResponse,
+)
+from .conversation_models import (
+    ConversationThreadResponse,
+    ConversationMessageResponse,
+    PaginatedThreadsResponse,
+    SendMessageRequest,
+)
 
 __all__ = [
     "OutboundCallRequest",
@@ -19,4 +29,10 @@ __all__ = [
     "ElevenLabsWebhookPayload",
     "InsightModel",
     "NotificationPreferences",
+    "ScheduledFollowUpResponse",
+    "PaginatedFollowUpsResponse",
+    "ConversationThreadResponse",
+    "ConversationMessageResponse",
+    "PaginatedThreadsResponse",
+    "SendMessageRequest",
 ]

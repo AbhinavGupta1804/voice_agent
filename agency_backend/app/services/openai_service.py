@@ -103,6 +103,7 @@ class OpenAIService:
             - user_name: string or null (extract the user's actual name from the transcript. Look for when the user introduces themselves or when the agent asks for their name. Return null if name cannot be determined)
             - follow_up_required: boolean (true ONLY if customer explicitly asks to be called back later, says they are busy, asks to reschedule, or similar scenarios. false otherwise)
             - follow_up_datetime: string or null (ISO 8601 format like "2025-02-03T15:00:00+05:30" - only if follow_up_required is true. Calculate based on current datetime and what customer said like "call me in 2 days", "call me tomorrow at 3 PM", "call after 2 hours")
+            - follow_up_first_message: string or null (ONLY if follow_up_required is true. The exact first message the agent should say when making the follow-up call, so the conversation continues from the previous call. MUST be in Hinglish (Hindi + English mix, e.g. "Hey [name], मैं Monica बोल रही हूँ TravelBuddy से. Aapne kaha tha ki aaj call back karein – travel options jo discuss kiye the unke baare mein follow-up kar rahi hoon."). Include the client's name naturally. Keep it concise, 1-3 sentences.
 
             Rules:
             - Output only JSON, no extra text.
@@ -111,6 +112,7 @@ class OpenAIService:
             - Extract user_name from the transcript when the user explicitly states their name or when asked by the agent.
             - Set follow_up_required=true ONLY when customer explicitly requests a callback (e.g., "call me later", "I'm busy right now", "call me tomorrow"). Do NOT set it true for general follow-ups.
             - For follow_up_datetime, use the current datetime provided and calculate the exact datetime based on customer's request.
+            - When follow_up_required is true, always provide follow_up_first_message in Hinglish (Hindi words in Devanagari + English mix), a natural opening line for the agent that references the prior conversation and the callback, so the follow-up call has continuity.
             """
 
         from datetime import datetime, timezone
@@ -149,6 +151,7 @@ class OpenAIService:
                 "user_name": data.get("user_name"),  # Extracted user name from transcript
                 "follow_up_required": bool(data.get("follow_up_required", False)),
                 "follow_up_datetime": data.get("follow_up_datetime"),
+                "follow_up_first_message": data.get("follow_up_first_message"),
             }
 
             if result["sentiment"] not in {"positive", "neutral", "negative"}:
@@ -177,5 +180,6 @@ class OpenAIService:
                 "user_name": None,
                 "follow_up_required": False,
                 "follow_up_datetime": None,
+                "follow_up_first_message": None,
             }
 

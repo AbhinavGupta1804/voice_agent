@@ -52,6 +52,9 @@ class Config:
     PORT = int(os.getenv("PORT", "8000"))
     NGROK_URL = os.getenv("NGROK_URL", "")
 
+    # Follow-up: delay (minutes) before retrying when user didn't pick up original call
+    FOLLOW_UP_NO_ANSWER_DELAY_MINUTES = int(os.getenv("FOLLOW_UP_NO_ANSWER_DELAY_MINUTES", "15"))
+
     # Brochure/Media Configuration
     BROCHURE_FILE_PATH = os.getenv("BROCHURE_FILE_PATH", "docs/FileSend.pdf")
     

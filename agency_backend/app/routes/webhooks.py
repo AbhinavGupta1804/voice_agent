@@ -1,7 +1,7 @@
 """Webhook handlers for voice agent call completion."""
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, Header, Form
@@ -18,9 +18,11 @@ from ..models import (
 )
 from ..services.call_record_service import CallRecordService
 from ..services.follow_up_service import ScheduledFollowUpService
+from ..services.conversation_service import ConversationService
 from ..services.openai_service import OpenAIService
 from ..services.email_service import EmailService
 from ..services.whatsapp_service import WhatsAppService
+from ..services.twilio_service import TwilioService
 from ..utils.webhook_security import verify_hmac_signature
 
 logger = logging.getLogger(__name__)
@@ -313,7 +315,8 @@ def register_webhook_routes(app):
                                     "summary": payload.summary,
                                     "original_call_date": datetime.now(timezone.utc).isoformat(),
                                     "call_type": call_type
-                                }
+                                },
+                                follow_up_first_message=ai_result.get("follow_up_first_message"),
                             )
                             logger.info(f"[Webhook] Scheduled follow-up call for {follow_up_dt}")
                         except Exception as follow_up_error:
@@ -363,44 +366,180 @@ def register_webhook_routes(app):
         To: str = Form(default="")
     ):
         """
-        Handle incoming WhatsApp message responses (confirm/reschedule).
-        
-        This endpoint receives webhooks from Twilio when users reply to WhatsApp messages.
+        Handle incoming WhatsApp messages: store in conversation thread, then reply (confirm/reschedule or generic bot).
         """
         try:
-            # Parse the incoming message
-            message_body = Body.strip().upper()
-            from_number = From.replace("whatsapp:", "")
-            
-            logger.info(f"[WhatsApp Webhook] Received response from {from_number}: {message_body}")
-            
-            # Handle user responses
-            if message_body == "CONFIRM":
-                # User confirmed the appointment
+            raw_body = (Body or "").strip()
+            from_number = (From or "").replace("whatsapp:", "").strip()
+            if not from_number:
+                return Response(content="", media_type="application/xml")
+
+            # Get or create thread and store inbound message (sender_type 'user')
+            thread = await ConversationService.get_or_create_thread(from_number, "whatsapp")
+            thread_id = thread.get("id")
+            if thread_id:
+                await ConversationService.add_message(
+                    thread_id=thread_id,
+                    body=raw_body,
+                    direction="inbound",
+                    sender_type="user",
+                    twilio_message_sid=None,
+                )
+                await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "channel": "whatsapp"})
+
+            message_body_upper = raw_body.upper()
+            if message_body_upper == "CONFIRM":
                 response_message = "✅ Great! Your appointment has been confirmed. We look forward to speaking with you!"
-                await WhatsAppService.send_simple_message(from_number, response_message)
-                
-                # TODO: Update the call record with confirmation status
-                logger.info(f"[WhatsApp Webhook] Appointment confirmed by {from_number}")
-                
-            elif message_body == "RESCHEDULE":
-                # User wants to reschedule
+            elif message_body_upper == "RESCHEDULE":
                 response_message = "📅 No problem! Please call us back at your convenience to reschedule your appointment, or reply with your preferred date and time."
-                await WhatsAppService.send_simple_message(from_number, response_message)
-                
-                logger.info(f"[WhatsApp Webhook] Reschedule requested by {from_number}")
-            
             else:
-                # Generic response for other messages
-                response_message = "Thank you for your message. If you'd like to confirm your appointment, reply CONFIRM. To reschedule, reply RESCHEDULE."
-                await WhatsAppService.send_simple_message(from_number, response_message)
-            
-            # Return empty TwiML response
+                response_message = "Thanks for your message. We'll get back to you shortly. If you'd like to confirm an appointment, reply CONFIRM. To reschedule, reply RESCHEDULE."
+
+            result = await WhatsAppService.send_simple_message(from_number, response_message)
+            message_sid = result.get("message_sid") if isinstance(result, dict) else None
+            if thread_id and message_sid:
+                await ConversationService.add_message(
+                    thread_id=thread_id,
+                    body=response_message,
+                    direction="outbound",
+                    sender_type="bot",
+                    twilio_message_sid=message_sid,
+                )
+
             return Response(content="", media_type="application/xml")
-            
         except Exception as exc:
-            logger.error(f"[WhatsApp Webhook] Error processing response: {exc}")
+            logger.error(f"[WhatsApp Webhook] Error: {exc}", exc_info=True)
             return Response(content="", media_type="application/xml")
+
+    @router.post("/webhook/inbound-email")
+    async def inbound_email_webhook(request: Request):
+        """
+        Handle inbound email from a provider (SendGrid, Mailgun, etc.).
+        Expects JSON: { "from_email": "...", "to_email": "...", "subject": "...", "body": "..." }.
+        Stores message in conversation thread and optionally sends bot auto-reply.
+        Configure your email provider to POST to this URL when an email is received.
+        """
+        try:
+            body = await request.json()
+            from_email = (body.get("from_email") or body.get("from") or "").strip().lower()
+            to_email = (body.get("to_email") or body.get("to") or "").strip().lower()
+            subject = (body.get("subject") or "").strip()
+            text = (body.get("body") or body.get("text") or body.get("text_plain") or "").strip()
+            if not from_email or "@" not in from_email:
+                return JSONResponse(content={"status": "ignored", "reason": "missing from_email"}, status_code=200)
+            if not text:
+                text = subject or "(No content)"
+
+            thread = await ConversationService.get_or_create_thread(channel="email", email_address=from_email)
+            thread_id = thread.get("id")
+            if thread_id:
+                await ConversationService.add_message(
+                    thread_id=thread_id,
+                    body=subject and f"Subject: {subject}\n\n{text}" or text,
+                    direction="inbound",
+                    sender_type="user",
+                )
+                await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "channel": "email"})
+
+            reply_text = "Thanks for your email. We'll get back to you shortly."
+            email_result = await EmailService.send_simple_email(to_email=from_email, body=reply_text)
+            if email_result.get("success") and thread_id:
+                await ConversationService.add_message(
+                    thread_id=thread_id,
+                    body=reply_text,
+                    direction="outbound",
+                    sender_type="bot",
+                )
+                await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "channel": "email"})
+
+            return JSONResponse(content={"status": "ok", "thread_id": thread_id})
+        except Exception as exc:
+            logger.error(f"[Inbound Email Webhook] Error: {exc}", exc_info=True)
+            return JSONResponse(content={"status": "error", "message": str(exc)}, status_code=500)
+
+    @router.post("/webhook/incoming-sms")
+    async def incoming_sms_webhook(
+        request: Request,
+        Body: str = Form(default=""),
+        From: str = Form(default=""),
+        To: str = Form(default="")
+    ):
+        """
+        Handle incoming SMS: store in conversation thread, then send bot ack via SMS.
+        Configure this URL in Twilio Console for your phone number's "A MESSAGE COMES IN" webhook.
+        """
+        try:
+            raw_body = (Body or "").strip()
+            from_number = (From or "").strip()
+            if not from_number:
+                return Response(content="<Response></Response>", media_type="application/xml")
+
+            thread = await ConversationService.get_or_create_thread(from_number, "sms")
+            thread_id = thread.get("id")
+            if thread_id:
+                await ConversationService.add_message(
+                    thread_id=thread_id,
+                    body=raw_body,
+                    direction="inbound",
+                    sender_type="user",
+                    twilio_message_sid=None,
+                )
+                await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "channel": "sms"})
+
+            response_message = "Thanks for your message. We'll get back to you shortly."
+            twilio_service = TwilioService()
+            result = await twilio_service.send_sms(from_number, response_message)
+            message_sid = result.get("message_sid") if result.get("success") else None
+            if thread_id and message_sid:
+                await ConversationService.add_message(
+                    thread_id=thread_id,
+                    body=response_message,
+                    direction="outbound",
+                    sender_type="bot",
+                    twilio_message_sid=message_sid,
+                )
+
+            return Response(content="<Response></Response>", media_type="application/xml")
+        except Exception as exc:
+            logger.error(f"[SMS Webhook] Error: {exc}", exc_info=True)
+            return Response(content="<Response></Response>", media_type="application/xml")
+
+    @router.post("/webhook/twilio-call-status")
+    async def twilio_call_status_webhook(
+        request: Request,
+        CallSid: str = Form(default=""),
+        CallStatus: str = Form(default=""),
+    ):
+        """
+        Twilio StatusCallback for outbound follow-up calls.
+        Called when the call ends (completed, no-answer, busy, canceled, failed).
+        Use ?follow_up_id=<id> in the StatusCallback URL when initiating the call.
+        """
+        try:
+            follow_up_id_param = request.query_params.get("follow_up_id")
+            if not follow_up_id_param or not follow_up_id_param.isdigit():
+                logger.warning("[Webhook] Twilio call status missing or invalid follow_up_id")
+                return Response(content="", status_code=200)
+            follow_up_id = int(follow_up_id_param)
+            logger.info(f"[Webhook] Twilio call status: CallSid={CallSid}, CallStatus={CallStatus}, follow_up_id={follow_up_id}")
+            if CallStatus == "completed":
+                await ScheduledFollowUpService.update_status(follow_up_id, "completed")
+                logger.info(f"[Webhook] Follow-up id={follow_up_id} marked completed (call answered and ended)")
+            elif CallStatus in ("no-answer", "busy", "canceled", "failed"):
+                reason = CallStatus.replace("-", " ")
+                await ScheduledFollowUpService.update_status(follow_up_id, "failed", reason)
+                updated = await ScheduledFollowUpService.mark_not_picked_if_max_retries(follow_up_id)
+                if updated:
+                    logger.info(f"[Webhook] Follow-up id={follow_up_id} marked not_picked (max retries reached)")
+                else:
+                    await ScheduledFollowUpService.retry_failed_follow_up(follow_up_id, retry_delay_minutes=15)
+                    logger.info(f"[Webhook] Follow-up id={follow_up_id} scheduled for retry")
+            else:
+                logger.debug(f"[Webhook] Ignoring CallStatus={CallStatus} for follow_up_id={follow_up_id}")
+            return Response(content="", status_code=200)
+        except Exception as exc:
+            logger.error(f"[Webhook] Twilio call status error: {exc}", exc_info=True)
+            return Response(content="", status_code=200)
 
     app.include_router(router)
 
@@ -460,8 +599,9 @@ async def _handle_audio_webhook(raw_data: dict) -> dict:
 async def _handle_call_failure_webhook(raw_data: dict) -> dict:
     """
     Handle call_initiation_failure webhook from ElevenLabs.
-    
-    Logs the failure for monitoring and notifies the dashboard.
+
+    Logs the failure for monitoring, notifies the dashboard, and schedules
+    a follow-up call when the user didn't pick up (no answer / busy / etc.).
     """
     try:
         data = raw_data.get("data", {})
@@ -469,11 +609,63 @@ async def _handle_call_failure_webhook(raw_data: dict) -> dict:
         conversation_id = data.get("conversation_id")
         failure_reason = data.get("failure_reason")
         metadata = data.get("metadata", {})
-        
+
         logger.warning(f"[Webhook] Call initiation failed - agent={agent_id}, conversation={conversation_id}")
         logger.warning(f"[Webhook] Failure reason: {failure_reason}")
         logger.warning(f"[Webhook] Metadata: {metadata}")
-        
+
+        if not conversation_id:
+            await dashboard_manager.broadcast(
+                "call_failed",
+                {"agent_id": agent_id, "conversation_id": None, "failure_reason": failure_reason, "metadata": metadata}
+            )
+            return {"status": "acknowledged", "failure_reason": failure_reason}
+
+        # Resolve phone_number and client_name for follow-up (no-answer scenario)
+        phone_number = await CallRecordService.get_phone_number_from_conversation(conversation_id)
+        if not phone_number and metadata:
+            phone_number = metadata.get("phone_number") or metadata.get("to") or ""
+        if isinstance(phone_number, str):
+            phone_number = phone_number.strip() or None
+
+        client_name = await CallRecordService.get_client_name_from_conversation(conversation_id)
+        if not client_name and metadata:
+            client_name = metadata.get("client_name") or ""
+        client_name = (client_name or metadata.get("client_name") or "Unknown").strip() or "Unknown"
+
+        # Schedule follow-up when we have a valid phone number (mark as follow-up: user didn't pick up)
+        if conversation_id and phone_number and _is_valid_phone_number(phone_number):
+            delay_minutes = getattr(Config, "FOLLOW_UP_NO_ANSWER_DELAY_MINUTES", 15)
+            scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+            try:
+                follow_up_id = await ScheduledFollowUpService.create_follow_up(
+                    call_id=conversation_id,
+                    phone_number=phone_number,
+                    client_name=client_name,
+                    scheduled_at=scheduled_at,
+                    context={
+                        "reason": "no_answer",
+                        "failure_reason": failure_reason,
+                        "original_attempt": "call_initiation_failure",
+                        "summary": f"Follow-up: user did not pick up ({failure_reason or 'unknown'})",
+                    },
+                )
+                if follow_up_id:
+                    logger.info(
+                        f"[Webhook] Scheduled no-answer follow-up id={follow_up_id} for {conversation_id} "
+                        f"at {phone_number}, scheduled_at={scheduled_at.isoformat()}"
+                    )
+                else:
+                    logger.warning(f"[Webhook] Failed to create no-answer follow-up for {conversation_id}")
+            except Exception as follow_up_err:
+                logger.error(f"[Webhook] Error scheduling no-answer follow-up: {follow_up_err}", exc_info=True)
+        else:
+            if not phone_number or not _is_valid_phone_number(phone_number):
+                logger.warning(
+                    f"[Webhook] No valid phone number for no-answer follow-up (conversation_id={conversation_id}). "
+                    "Skipping scheduled follow-up."
+                )
+
         # Broadcast to dashboard
         await dashboard_manager.broadcast(
             "call_failed",
@@ -484,112 +676,142 @@ async def _handle_call_failure_webhook(raw_data: dict) -> dict:
                 "metadata": metadata
             }
         )
-        
+
         return {"status": "acknowledged", "failure_reason": failure_reason}
-        
+
     except Exception as e:
         logger.error(f"[Webhook] Error processing call failure webhook: {e}", exc_info=True)
         return {"status": "error", "message": str(e)}
 
 
+def _build_post_call_summary_body(client_name: str, summary: str, follow_up_date: Optional[str] = None) -> str:
+    """Build the summary + brochure message body for recording in conversation."""
+    follow_up_line = f"\n\n📅 Scheduled Follow-up: {follow_up_date}" if follow_up_date else ""
+    return (
+        f"📞 Call Summary for {client_name}\n\n"
+        f"Hello {client_name}! Thank you for your recent call. Here's a summary of our conversation:\n\n"
+        f"📝 Summary:\n{summary}{follow_up_line}\n\n"
+        f"📎 Attached: Our brochure with more information about our services.\n\n"
+        "---\n_This is an automated message from DevFuzzion Voice Assistant._"
+    )
+
+
 async def _send_post_call_notifications(payload: CallCompletePayload, record: dict) -> None:
     """
-    Send post-call notifications via email and/or WhatsApp based on user preferences.
-    
-    Args:
-        payload: The call completion payload with notification preferences.
-        record: The saved call record.
+    Send brochure + summary after every call via WhatsApp and/or email when contact info is available,
+    and record each sent message in the conversation thread for the Chats page.
     """
-    if not payload.notification_preferences:
-        logger.info("[PostCallNotifications] No notification preferences set, skipping")
-        return
-    
-    prefs = payload.notification_preferences
-    
-    # Helper function to get phone number from multiple sources
+    prefs = payload.notification_preferences or NotificationPreferences(
+        notify_email=False, notify_whatsapp=False, email_address=None, whatsapp_number=None,
+        email_sent=False, whatsapp_sent=False,
+    )
+
+    # Helper: get phone number from multiple sources
     async def _get_phone_number_fallback() -> Optional[str]:
-        """Get phone number from multiple sources with fallbacks."""
-        # Try 1: From notification preferences (extracted by AI)
         if prefs.whatsapp_number and _is_valid_phone_number(prefs.whatsapp_number):
-            logger.info(f"[PostCallNotifications] Using WhatsApp number from preferences: {prefs.whatsapp_number}")
             return prefs.whatsapp_number
-        
-        # Try 2: From payload phone_number
         if payload.phone_number and _is_valid_phone_number(payload.phone_number):
-            logger.info(f"[PostCallNotifications] Using phone number from payload: {payload.phone_number}")
             return payload.phone_number
-        
-        # Try 3: From database record
         if record.get("phone_number") and _is_valid_phone_number(record.get("phone_number")):
-            logger.info(f"[PostCallNotifications] Using phone number from database record: {record.get('phone_number')}")
             return record.get("phone_number")
-        
-        # Try 4: From call metadata using conversation_id
         if payload.call_id:
             metadata_phone = await CallRecordService.get_phone_number_from_conversation(payload.call_id)
             if metadata_phone and _is_valid_phone_number(metadata_phone):
-                logger.info(f"[PostCallNotifications] Using phone number from call metadata: {metadata_phone}")
                 return metadata_phone
-        
-        logger.warning("[PostCallNotifications] No valid phone number found from any source")
         return None
-    
-    # Send email notification if requested
-    if prefs.notify_email and prefs.email_address:
+
+    # Helper: get email from multiple sources
+    def _get_email_fallback() -> Optional[str]:
+        email = (prefs.email_address or "").strip() or None
+        if email and "@" in email:
+            return email
+        # Could extend to payload/record if we add email_address there later
+        return None
+
+    summary_text = payload.summary or "No summary available."
+    summary_body_for_conversation = _build_post_call_summary_body(
+        payload.client_name, summary_text, payload.follow_up_date
+    )
+
+    # ----- WhatsApp: send brochure + summary after every call when we have a number -----
+    whatsapp_number = await _get_phone_number_fallback()
+    if whatsapp_number:
+        try:
+            whatsapp_result = await WhatsAppService.send_call_summary_whatsapp(
+                to_number=whatsapp_number,
+                client_name=payload.client_name,
+                summary=summary_text,
+                follow_up_date=payload.follow_up_date,
+                call_id=payload.call_id,
+            )
+            if whatsapp_result is None:
+                whatsapp_result = {"success": False, "error": "No response from WhatsApp service"}
+            if whatsapp_result.get("success"):
+                logger.info(f"[PostCallNotifications] WhatsApp (brochure + summary) sent to {whatsapp_number}")
+                prefs.whatsapp_sent = True
+                if whatsapp_number != (prefs.whatsapp_number or ""):
+                    prefs.whatsapp_number = whatsapp_number
+                # Record in conversation so it shows on Chats page
+                try:
+                    thread = await ConversationService.get_or_create_thread(whatsapp_number, "whatsapp")
+                    if thread.get("id"):
+                        await ConversationService.add_message(
+                            thread_id=thread["id"],
+                            body=summary_body_for_conversation,
+                            direction="outbound",
+                            sender_type="bot",
+                            twilio_message_sid=whatsapp_result.get("message_sid"),
+                        )
+                        await dashboard_manager.broadcast("conversation_message", {"thread_id": thread["id"], "channel": "whatsapp"})
+                except Exception as rec:
+                    logger.warning(f"[PostCallNotifications] Failed to record WhatsApp in conversation: {rec}")
+            else:
+                logger.warning(f"[PostCallNotifications] WhatsApp failed: {whatsapp_result.get('error')}")
+        except Exception as e:
+            logger.error(f"[PostCallNotifications] WhatsApp error: {e}")
+    else:
+        logger.debug("[PostCallNotifications] No valid phone number for WhatsApp")
+
+    # ----- Email: send brochure + summary after every call when we have an email -----
+    email_address = _get_email_fallback()
+    if email_address:
         try:
             email_result = await EmailService.send_call_summary_email(
-                to_email=prefs.email_address,
+                to_email=email_address,
                 client_name=payload.client_name,
-                summary=payload.summary or "No summary available.",
-                follow_up_date=payload.follow_up_date
+                summary=summary_text,
+                follow_up_date=payload.follow_up_date,
             )
-            
+            if email_result is None:
+                email_result = {"success": False, "error": "No response from email service"}
             if email_result.get("success"):
-                logger.info(f"[PostCallNotifications] Email sent to {prefs.email_address}")
-                # Update the record to mark email as sent
+                logger.info(f"[PostCallNotifications] Email (brochure + summary) sent to {email_address}")
                 prefs.email_sent = True
+                if email_address != (prefs.email_address or ""):
+                    prefs.email_address = email_address
+                # Record in conversation so it shows on Chats page
+                try:
+                    thread = await ConversationService.get_or_create_thread(channel="email", email_address=email_address)
+                    if thread.get("id"):
+                        await ConversationService.add_message(
+                            thread_id=thread["id"],
+                            body=summary_body_for_conversation,
+                            direction="outbound",
+                            sender_type="bot",
+                        )
+                        await dashboard_manager.broadcast("conversation_message", {"thread_id": thread["id"], "channel": "email"})
+                except Exception as rec:
+                    logger.warning(f"[PostCallNotifications] Failed to record email in conversation: {rec}")
             else:
                 logger.warning(f"[PostCallNotifications] Email failed: {email_result.get('error')}")
         except Exception as e:
             logger.error(f"[PostCallNotifications] Email error: {e}")
-    
-    # Send WhatsApp notification if requested
-    if prefs.notify_whatsapp:
-        # Get phone number from multiple sources with fallbacks
-        whatsapp_number = await _get_phone_number_fallback()
-        
-        if whatsapp_number:
-            try:
-                whatsapp_result = await WhatsAppService.send_call_summary_whatsapp(
-                    to_number=whatsapp_number,
-                    client_name=payload.client_name,
-                    summary=payload.summary or "No summary available.",
-                    follow_up_date=payload.follow_up_date,
-                    call_id=payload.call_id
-                )
-            
-                if whatsapp_result.get("success"):
-                    logger.info(f"[PostCallNotifications] WhatsApp sent to {whatsapp_number}")
-                    # Update the record to mark WhatsApp as sent
-                    prefs.whatsapp_sent = True
-                    # Update the stored number in preferences if we used a different source
-                    if whatsapp_number != prefs.whatsapp_number:
-                        prefs.whatsapp_number = whatsapp_number
-                        logger.info(f"[PostCallNotifications] Updated preferences with phone number: {whatsapp_number}")
-                else:
-                    logger.warning(f"[PostCallNotifications] WhatsApp failed: {whatsapp_result.get('error')}")
-            except Exception as e:
-                logger.error(f"[PostCallNotifications] WhatsApp error: {e}")
-        else:
-            logger.warning(
-                "[PostCallNotifications] No valid WhatsApp number available for notification. "
-                "Tried: preferences, payload, database record, and call metadata."
-            )
-    
-    # Update record with notification status if any were sent
+    else:
+        logger.debug("[PostCallNotifications] No valid email address for email")
+
     if prefs.email_sent or prefs.whatsapp_sent:
         try:
-            updated_payload = CallCompletePayload(**record)
+            updated_payload = CallCompletePayload.model_validate(record)
             updated_payload.notification_preferences = prefs
             await CallRecordService.upsert_call_record(updated_payload)
             logger.info("[PostCallNotifications] Updated record with notification status")

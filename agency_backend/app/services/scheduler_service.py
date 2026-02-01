@@ -64,18 +64,21 @@ async def execute_follow_up(follow_up: dict) -> bool:
             "is_follow_up": "true",
             "original_summary": context.get("summary", "")[:200]
         }
+        # Pass LLM-generated first message for follow-up so the agent continues from the previous call
+        first_message = follow_up.get("follow_up_first_message") or ""
+        if first_message:
+            params["follow_up_first_message"] = first_message[:500]
         twiml_url = f"{base_url}/outbound-call-twiml?{urlencode(params)}"
-        
-        # Initiate the follow-up call
+        status_callback_url = f"{base_url}/webhook/twilio-call-status?follow_up_id={follow_up_id}"
+
+        # Initiate the follow-up call; completion is set by Twilio StatusCallback when call ends
         call_info = await twilio_service.initiate_call(
             to_number=phone_number,
-            twiml_url=twiml_url
+            twiml_url=twiml_url,
+            status_callback=status_callback_url,
         )
-        
-        logger.info(f"[Scheduler] Follow-up call initiated, call_sid={call_info['call_sid']}")
-        
-        # Mark as completed
-        await ScheduledFollowUpService.update_status(follow_up_id, "completed")
+
+        logger.info(f"[Scheduler] Follow-up call initiated, call_sid={call_info['call_sid']}; status will be set when call ends")
         return True
         
     except Exception as e:

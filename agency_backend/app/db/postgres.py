@@ -9,6 +9,17 @@ from ..config import Config
 
 logger = logging.getLogger(__name__)
 
+# Exceptions that indicate a stale/closed connection; retry once on these
+_CONNECTION_RETRY_EXCEPTIONS = (
+    asyncpg.exceptions.ConnectionDoesNotExistError,
+    ConnectionResetError,
+    OSError,
+)
+try:
+    _CONNECTION_RETRY_EXCEPTIONS += (asyncpg.exceptions.InterfaceError,)
+except AttributeError:
+    pass
+
 _pool: Optional[Pool] = None
 _init_lock = asyncio.Lock()
 _initialized = False
@@ -93,6 +104,49 @@ async def get_db_pool() -> Pool:
         raise RuntimeError("Database pool is not available")
     
     return _pool
+
+
+class _PoolConnectionContext:
+    """Async context manager that acquires a connection with one retry on stale connection errors."""
+
+    _conn = None
+    _pool = None
+
+    async def __aenter__(self):
+        pool = await get_db_pool()
+        last_exc = None
+        for attempt in range(2):
+            try:
+                self._conn = await pool.acquire()
+                self._pool = pool
+                return self._conn
+            except _CONNECTION_RETRY_EXCEPTIONS as e:
+                last_exc = e
+                if attempt == 0:
+                    logger.warning(
+                        "[PostgreSQL] Connection acquire failed (stale/closed), retrying once: %s",
+                        e,
+                    )
+                else:
+                    raise
+        raise last_exc
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._conn is not None and self._pool is not None:
+            try:
+                await self._pool.release(self._conn)
+            except Exception:
+                pass
+            self._conn = None
+            self._pool = None
+
+
+def acquire_connection():
+    """
+    Acquire a connection from the pool with one retry on stale/closed connection errors.
+    Use: async with acquire_connection() as conn: ...
+    """
+    return _PoolConnectionContext()
 
 
 async def close_postgres():

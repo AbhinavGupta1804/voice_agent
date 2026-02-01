@@ -1,6 +1,7 @@
 """Refactored outbound call handlers for Twilio-ElevenLabs integration."""
 
 import logging
+from html import escape as html_escape
 from urllib.parse import urlencode
 from fastapi import WebSocket, Request
 from fastapi.responses import Response, JSONResponse
@@ -97,8 +98,9 @@ def register_outbound_routes(app):
         query_params = dict(request.query_params)
         client_name = query_params.get("client_name", "")
         phone_number = query_params.get("phone_number", "")
+        follow_up_first_message = query_params.get("follow_up_first_message", "")
         
-        logger.info(f"[TwiML] Received query params: client_name={client_name}, phone_number={phone_number}")
+        logger.info(f"[TwiML] Received query params: client_name={client_name}, phone_number={phone_number}, has_follow_up_first_message={bool(follow_up_first_message)}")
         
         # Build base URL
         base_url = Config.NGROK_URL or f"https://{request.headers.get('host', 'localhost')}"
@@ -107,14 +109,21 @@ def register_outbound_routes(app):
         
         logger.info(f"[TwiML] Generated WebSocket URL: {ws_stream_url}")
         
+        # Escape for XML attribute (Twilio passes these to the WebSocket start event)
+        client_name_esc = html_escape(client_name)
+        phone_number_esc = html_escape(phone_number)
+        follow_up_first_message_esc = html_escape(follow_up_first_message) if follow_up_first_message else ""
+        
         # Use Twilio Stream Parameters to pass metadata
         # These will be available in the 'start' event's customParameters
+        follow_up_param = f'<Parameter name="follow_up_first_message" value="{follow_up_first_message_esc}" />' if follow_up_first_message_esc else ""
         twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
         <Stream url="{ws_stream_url}">
-            <Parameter name="client_name" value="{client_name}" />
-            <Parameter name="phone_number" value="{phone_number}" />
+            <Parameter name="client_name" value="{client_name_esc}" />
+            <Parameter name="phone_number" value="{phone_number_esc}" />
+            {follow_up_param}
         </Stream>
     </Connect>
 </Response>"""

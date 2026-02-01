@@ -14,10 +14,20 @@ from ..models import (
     PaginatedCallsResponse,
     CallSummaryResponse,
     OutboundCallRequest,
+    PaginatedFollowUpsResponse,
+    ScheduledFollowUpResponse,
+    ConversationThreadResponse,
+    ConversationMessageResponse,
+    PaginatedThreadsResponse,
+    SendMessageRequest,
 )
 from ..models.call_models import BulkOutboundCallRequest, BulkOutboundCallResponse, CallResult, CallRecipient
 from ..services.call_record_service import CallRecordService
+from ..services.follow_up_service import ScheduledFollowUpService
+from ..services.conversation_service import ConversationService
 from ..services.twilio_service import TwilioService
+from ..services.whatsapp_service import WhatsAppService
+from ..services.email_service import EmailService
 from ..utils.csv_processor import CSVProcessor
 
 logger = logging.getLogger(__name__)
@@ -73,6 +83,107 @@ def register_dashboard_routes(app):
         if not record:
             raise HTTPException(status_code=404, detail="Call not found")
         return CallRecordResponse(**record)
+
+    @router.get("/api/follow-ups", response_model=PaginatedFollowUpsResponse)
+    async def list_follow_ups(
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        status: str = Query(None, description="Filter by status: pending, processing, completed, failed, cancelled"),
+    ):
+        """List scheduled follow-ups with optional status filter and pagination."""
+        offset = (page - 1) * page_size
+        records, total = await ScheduledFollowUpService.list_follow_ups(
+            limit=page_size,
+            offset=offset,
+            status=(status.strip() or None) if status else None,
+        )
+        items = [ScheduledFollowUpResponse(**r) for r in records]
+        return PaginatedFollowUpsResponse(
+            page=page,
+            page_size=page_size,
+            total=total,
+            items=items,
+        )
+
+    # ---------- Conversation (WhatsApp/SMS) threads and messages ----------
+    @router.get("/api/conversation-threads", response_model=PaginatedThreadsResponse)
+    async def list_conversation_threads(
+        channel: str = Query(..., description="whatsapp or sms"),
+        page: int = Query(1, ge=1),
+        page_size: int = Query(50, ge=1, le=100),
+    ):
+        """List threads for a channel (whatsapp, sms, or email)."""
+        if channel not in ("whatsapp", "sms", "email"):
+            raise HTTPException(status_code=400, detail="channel must be whatsapp, sms, or email")
+        offset = (page - 1) * page_size
+        records, total = await ConversationService.list_threads(channel=channel, limit=page_size, offset=offset)
+        items = [ConversationThreadResponse(**r) for r in records]
+        return PaginatedThreadsResponse(page=page, page_size=page_size, total=total, items=items)
+
+    @router.get("/api/conversation-threads/{thread_id}", response_model=ConversationThreadResponse)
+    async def get_conversation_thread(thread_id: int):
+        """Get a single thread by id."""
+        thread = await ConversationService.get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        return ConversationThreadResponse(**thread)
+
+    @router.get("/api/conversation-threads/{thread_id}/messages")
+    async def list_conversation_messages(
+        thread_id: int,
+        limit: int = Query(100, ge=1, le=200),
+        before_id: int = Query(None, description="For pagination: return messages before this id"),
+    ):
+        """List messages in a thread (oldest first)."""
+        thread = await ConversationService.get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        messages = await ConversationService.list_messages(thread_id, limit=limit, before_id=before_id)
+        return {"thread_id": thread_id, "messages": [ConversationMessageResponse(**m) for m in messages]}
+
+    @router.post("/api/conversation-threads/{thread_id}/send")
+    async def send_conversation_message(thread_id: int, body: SendMessageRequest):
+        """Client sends a message into the thread; deliver via WhatsApp or SMS."""
+        thread = await ConversationService.get_thread(thread_id)
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        channel = thread["channel"]
+        phone_number = thread.get("phone_number")
+        email_address = thread.get("email_address")
+        message_sid = None
+        if channel == "whatsapp":
+            if not phone_number:
+                raise HTTPException(status_code=400, detail="Thread has no phone number")
+            result = await WhatsAppService.send_simple_message(phone_number, body.body)
+            if not result.get("success"):
+                raise HTTPException(status_code=502, detail=result.get("error", "Failed to send WhatsApp message"))
+            message_sid = result.get("message_sid")
+        elif channel == "sms":
+            if not phone_number:
+                raise HTTPException(status_code=400, detail="Thread has no phone number")
+            result = await twilio_service.send_sms(phone_number, body.body)
+            if not result.get("success"):
+                raise HTTPException(status_code=502, detail=result.get("error", "Failed to send SMS"))
+            message_sid = result.get("message_sid")
+        elif channel == "email":
+            if not email_address:
+                raise HTTPException(status_code=400, detail="Thread has no email address")
+            result = await EmailService.send_simple_email(to_email=email_address, body=body.body)
+            if not result.get("success"):
+                raise HTTPException(status_code=502, detail=result.get("error", "Failed to send email"))
+        else:
+            raise HTTPException(status_code=400, detail="Unknown channel")
+        msg = await ConversationService.add_message(
+            thread_id=thread_id,
+            body=body.body,
+            direction="outbound",
+            sender_type="client",
+            twilio_message_sid=message_sid,
+        )
+        if not msg:
+            raise HTTPException(status_code=500, detail="Message saved but failed to persist")
+        await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "message": msg})
+        return ConversationMessageResponse(**msg)
 
     @router.post("/api/initiate_call")
     async def initiate_call(request_data: OutboundCallRequest, request: Request):
