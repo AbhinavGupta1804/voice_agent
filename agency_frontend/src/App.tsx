@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "@/hooks/use-theme";
 import MakeCall from "./pages/MakeCall";
 import CallHistory from "./pages/CallHistory";
+import FollowUps from "./pages/FollowUps";
 import Analytics from "./pages/Analytics";
 import CustomData from "./pages/CustomData";
 import Chat from "./pages/Chat";
@@ -25,6 +26,7 @@ const App = () => (
             <Route path="/" element={<Navigate to="/make-call" replace />} />
             <Route path="/make-call" element={<MakeCall />} />
             <Route path="/call-history" element={<CallHistory />} />
+            <Route path="/follow-ups" element={<FollowUps />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/custom-data" element={<CustomData />} />
             <Route path="/chat" element={<Chat />} />

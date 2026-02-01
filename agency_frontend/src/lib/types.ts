@@ -170,3 +170,62 @@ export interface AnalyticsData {
   sentiment_scores: SentimentData[];
 }
 
+// Scheduled follow-up (from GET /api/follow-ups)
+export interface ScheduledFollowUp {
+  id: number;
+  call_id: string;
+  phone_number: string;
+  client_name: string | null;
+  scheduled_at: string;
+  status: "pending" | "processing" | "completed" | "failed" | "cancelled" | "not_picked";
+  retry_count: number;
+  max_retries: number;
+  last_error: string | null;
+  context: Record<string, unknown> | null;
+  created_at: string | null;
+  executed_at: string | null;
+}
+
+export interface PaginatedFollowUpsResponse {
+  page: number;
+  page_size: number;
+  total: number;
+  items: ScheduledFollowUp[];
+}
+
+// Conversation (WhatsApp/SMS/Email) threads and messages
+export type ConversationChannel = "whatsapp" | "sms" | "email";
+export type MessageSenderType = "bot" | "client" | "user";
+
+export interface ConversationThread {
+  id: number;
+  phone_number: string | null;
+  channel: ConversationChannel;
+  display_name: string | null;
+  email_address: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessage {
+  id: number;
+  thread_id: number;
+  body: string;
+  direction: "inbound" | "outbound";
+  sender_type: MessageSenderType;
+  twilio_message_sid: string | null;
+  created_at: string;
+}
+
+export interface PaginatedThreadsResponse {
+  page: number;
+  page_size: number;
+  total: number;
+  items: ConversationThread[];
+}
+
+export interface ThreadMessagesResponse {
+  thread_id: number;
+  messages: ConversationMessage[];
+}
+

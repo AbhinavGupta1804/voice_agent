@@ -7,6 +7,10 @@ import type {
   BulkOutboundCallRequest,
   BulkOutboundCallResponse,
   AnalyticsData,
+  PaginatedFollowUpsResponse,
+  PaginatedThreadsResponse,
+  ThreadMessagesResponse,
+  ConversationMessage,
 } from './types';
 
 // API Base URL - supports both VITE_API_URL (preferred) and VITE_API_BASE_URL (legacy)
@@ -117,6 +121,66 @@ export async function fetchAnalytics(
   const params = new URLSearchParams({ period });
   const response = await fetch(`${API_BASE_URL}/api/analytics?${params}`);
   return handleResponse<AnalyticsData>(response);
+}
+
+// ============ Conversation (WhatsApp/SMS) APIs ============
+
+export async function fetchConversationThreads(
+  channel: "whatsapp" | "sms" | "email",
+  page: number = 1,
+  pageSize: number = 50
+): Promise<PaginatedThreadsResponse> {
+  const params = new URLSearchParams({
+    channel,
+    page: page.toString(),
+    page_size: pageSize.toString(),
+  });
+  const response = await fetch(`${API_BASE_URL}/api/conversation-threads?${params}`);
+  return handleResponse<PaginatedThreadsResponse>(response);
+}
+
+export async function fetchThreadMessages(
+  threadId: number,
+  limit: number = 100,
+  beforeId?: number
+): Promise<ThreadMessagesResponse> {
+  const params = new URLSearchParams({ limit: limit.toString() });
+  if (beforeId != null) params.set("before_id", beforeId.toString());
+  const response = await fetch(
+    `${API_BASE_URL}/api/conversation-threads/${threadId}/messages?${params}`
+  );
+  return handleResponse<ThreadMessagesResponse>(response);
+}
+
+export async function sendConversationMessage(
+  threadId: number,
+  body: string
+): Promise<ConversationMessage> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/conversation-threads/${threadId}/send`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body }),
+    }
+  );
+  return handleResponse<ConversationMessage>(response);
+}
+
+// ============ Follow-ups APIs ============
+
+export async function fetchFollowUps(
+  page: number = 1,
+  pageSize: number = 20,
+  status?: string
+): Promise<PaginatedFollowUpsResponse> {
+  const params = new URLSearchParams({
+    page: page.toString(),
+    page_size: pageSize.toString(),
+  });
+  if (status) params.set("status", status);
+  const response = await fetch(`${API_BASE_URL}/api/follow-ups?${params}`);
+  return handleResponse<PaginatedFollowUpsResponse>(response);
 }
 
 // ============ WebSocket URL ============
