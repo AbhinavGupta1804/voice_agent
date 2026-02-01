@@ -14,9 +14,6 @@ class Config:
     ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID")
     ELEVENLABS_WEBHOOK_SECRET = os.getenv("ELEVENLABS_WEBHOOK_SECRET", "")
     
-    # Google Gemini Configuration
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    
     # Groq Configuration
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
