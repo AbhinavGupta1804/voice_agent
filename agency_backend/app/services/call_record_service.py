@@ -329,6 +329,16 @@ class CallRecordService:
         
         timestamp = _normalize_timestamp(timestamp)
         
+        # Handle follow_up_date - convert string to date if needed
+        follow_up_date_value = record.get("follow_up_date")
+        if isinstance(follow_up_date_value, str):
+            try:
+                from datetime import date as date_type
+                follow_up_date_value = date_type.fromisoformat(follow_up_date_value)
+            except (ValueError, AttributeError):
+                follow_up_date_value = None
+        record["follow_up_date"] = follow_up_date_value
+        
         logger.info(f"[CallRecord] Upserting call_id={record['call_id']}, timestamp={timestamp}")
         logger.info(f"[CallRecord] Record data: client_name={record.get('client_name')}, duration={record['insights']['duration_sec']}")
         

@@ -31,9 +31,9 @@ async def init_postgres():
             
             _pool = await asyncpg.create_pool(
                 Config.DB_URL,
-                min_size=2,
-                max_size=10,
-                max_inactive_connection_lifetime=0,  # Disable idle connection cleanup
+                min_size=1,
+                max_size=3,
+                max_inactive_connection_lifetime=300,  # Close idle connections after 5 minutes
                 command_timeout=60,
                 statement_cache_size=100,
                 # Connection health check settings
