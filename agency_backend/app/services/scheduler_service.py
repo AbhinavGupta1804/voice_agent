@@ -143,7 +143,7 @@ async def start_scheduler():
     # Add job to check for due follow-ups every 2 minutes
     _scheduler.add_job(
         check_and_execute_due_follow_ups,
-        trigger=IntervalTrigger(minutes=2),
+        trigger=IntervalTrigger(minutes=20),
         id="check_follow_ups",
         name="Check and execute due follow-up calls",
         replace_existing=True

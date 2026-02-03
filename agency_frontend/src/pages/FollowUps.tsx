@@ -25,7 +25,7 @@ import {
 import { useFollowUps } from "@/hooks/use-follow-ups";
 import type { ScheduledFollowUp } from "@/lib/types";
 
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 10;
 const STATUS_OPTIONS = [
   { value: "all", label: "All" },
   { value: "pending", label: "Pending" },
@@ -132,29 +132,56 @@ export default function FollowUps() {
         </header>
 
         {/* Filters & summary */}
-        <div className="flex flex-wrap items-center gap-4 mb-6">
-          <Select
-            value={statusFilter}
-            onValueChange={(v) => {
-              setStatusFilter(v);
-              setPage(1);
-            }}
-          >
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
-            <SelectContent>
-              {STATUS_OPTIONS.map((opt) => (
-                <SelectItem key={opt.value} value={opt.value}>
-                  {opt.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {followUpsData && (
-            <p className="text-sm text-muted-foreground">
-              {followUpsData.total} follow-up{followUpsData.total !== 1 ? "s" : ""} total
-            </p>
+        <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+          <div className="flex items-center gap-4">
+            <Select
+              value={statusFilter}
+              onValueChange={(v) => {
+                setStatusFilter(v);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                {STATUS_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {followUpsData && (
+              <p className="text-sm text-muted-foreground">
+                {followUpsData.total} follow-up{followUpsData.total !== 1 ? "s" : ""} total
+              </p>
+            )}
+          </div>
+
+          {/* Top Pagination */}
+          {!isLoading && followUpsData && followUpsData.total > PAGE_SIZE && (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <span className="text-sm font-medium">
+                {page} / {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
           )}
         </div>
 
@@ -321,32 +348,7 @@ export default function FollowUps() {
             </div>
           )}
 
-          {/* Pagination */}
-          {!isLoading && followUpsData && followUpsData.total > PAGE_SIZE && (
-            <div className="p-4 border-t border-border flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">
-                Page {page} of {totalPages}
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page <= 1}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page >= totalPages}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          )}
+
         </div>
       </div>
     </DashboardLayout>

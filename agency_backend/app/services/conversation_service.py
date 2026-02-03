@@ -41,7 +41,17 @@ class ConversationService:
         else:
             if not phone_number or not str(phone_number).strip():
                 raise ValueError("phone_number required for whatsapp/sms")
-            phone_number = str(phone_number).strip()
+            
+            # Normalize phone number to prevent duplicates
+            phone_number = str(phone_number).strip().replace("whatsapp:", "")
+            # Remove any unwanted characters like spaces or dashes
+            phone_number = "".join(c for c in phone_number if c.isdigit() or c == '+')
+            
+            # Ensure proper E.164 format with '+'
+            if not phone_number.startswith('+'):
+                # Handle common case where '91' is present but '+' is missing
+                phone_number = "+" + phone_number
+            
             email_address = None
         try:
             async with pool.acquire() as conn:
@@ -162,6 +172,34 @@ class ConversationService:
                 return out
         except asyncpg.PostgresError as exc:
             logger.error(f"[Conversation] list_messages failed: {exc}")
+            return []
+
+    @staticmethod
+    async def get_recent_messages(
+        thread_id: int,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """List the MOST RECENT messages in a thread (for LLM context)."""
+        pool = await get_db_pool()
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, thread_id, body, direction, sender_type, twilio_message_sid, created_at
+                    FROM conversation_messages
+                    WHERE thread_id = $1
+                    ORDER BY id DESC
+                    LIMIT $2
+                    """,
+                    thread_id,
+                    limit,
+                )
+                # Reverse to get chronological order (Oldest -> Newest)
+                out = [dict(r) for r in rows]
+                out.reverse()
+                return out
+        except asyncpg.PostgresError as exc:
+            logger.error(f"[Conversation] get_recent_messages failed: {exc}")
             return []
 
     @staticmethod

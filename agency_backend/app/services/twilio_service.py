@@ -199,10 +199,23 @@ class TwilioService:
             dict: { "success": bool, "message_sid": str | None, "error": str | None }
         """
         try:
+            # Normalize phone number
+            cleaned = "".join(filter(lambda x: x.isdigit() or x == '+', to_number))
+            # E.164 formatting logic
+            if not cleaned.startswith('+'):
+                if len(cleaned) == 10:
+                    cleaned = f"+91{cleaned}"  # Default to India
+                elif len(cleaned) == 12 and cleaned.startswith("91"):
+                    cleaned = f"+{cleaned}"
+                else:
+                    # Fallback for other lengths, maybe US or other country? 
+                    # Twilio requires + for non-US mostly, but let's try assuming they just forgot +
+                    cleaned = f"+{cleaned}"
+                    
             message = await asyncio.to_thread(
                 self.client.messages.create,
                 from_=Config.TWILIO_PHONE_NUMBER,
-                to=to_number,
+                to=cleaned,
                 body=body[:1600],
             )
             return {

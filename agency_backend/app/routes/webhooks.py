@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, Response
 
 from ..config import Config
 from ..handlers.dashboard_ws import dashboard_manager
+from .groq_proxy import generate_groq_response, ChatMessage
 from ..models import (
     CallCompletePayload, 
     CallRecordResponse, 
@@ -371,32 +372,79 @@ def register_webhook_routes(app):
         try:
             raw_body = (Body or "").strip()
             from_number = (From or "").replace("whatsapp:", "").strip()
+            
+            logger.info(f"[DEBUG] Webhook triggered. From: {from_number}, Body: {raw_body}")
+
             if not from_number:
+                logger.error("[DEBUG] Missing from_number")
                 return Response(content="", media_type="application/xml")
 
-            # Get or create thread and store inbound message (sender_type 'user')
-            thread = await ConversationService.get_or_create_thread(from_number, "whatsapp")
-            thread_id = thread.get("id")
-            if thread_id:
-                await ConversationService.add_message(
-                    thread_id=thread_id,
-                    body=raw_body,
-                    direction="inbound",
-                    sender_type="user",
-                    twilio_message_sid=None,
-                )
-                await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "channel": "whatsapp"})
+            # Get or create thread
+            try:
+                thread = await ConversationService.get_or_create_thread(from_number, "whatsapp")
+                thread_id = thread.get("id")
+                logger.info(f"[DEBUG] Thread Found/Created: ID={thread_id}")
+            except Exception as e:
+                logger.error(f"[DEBUG] Failed to get thread: {e}")
+                thread_id = None
 
+            if thread_id:
+                try:
+                    msg = await ConversationService.add_message(
+                        thread_id=thread_id,
+                        body=raw_body,
+                        direction="inbound",
+                        sender_type="client",  # CHANGED from 'user' to 'client' to match DB constraint
+                        twilio_message_sid=None,
+                    )
+                    logger.info(f"[DEBUG] Inbound Message Saved: {msg}")
+                    await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "channel": "whatsapp"})
+                except Exception as e:
+                     logger.error(f"[DEBUG] Failed to save inbound msg: {e}")
+
+            # --- AI RESPONSE LOGIC ---
             message_body_upper = raw_body.upper()
+            
+            # Special Keywords Override AI
             if message_body_upper == "CONFIRM":
                 response_message = "✅ Great! Your appointment has been confirmed. We look forward to speaking with you!"
             elif message_body_upper == "RESCHEDULE":
                 response_message = "📅 No problem! Please call us back at your convenience to reschedule your appointment, or reply with your preferred date and time."
             else:
-                response_message = "Thanks for your message. We'll get back to you shortly. If you'd like to confirm an appointment, reply CONFIRM. To reschedule, reply RESCHEDULE."
+                # Generate AI Response using Groq
+                try:
+                    # 1. Fetch recent history for context
+                    history = []
+                    if thread_id:
+                        # Get last 15 messages (Chronological: Oldest -> Newest) using get_recent_messages
+                        # This ensures we see the ACTUAL latest conversation, not just the first 10 ever.
+                        raw_msgs = await ConversationService.get_recent_messages(thread_id, limit=15)
+                        for m in raw_msgs:
+                            role = "assistant" if m["sender_type"] in ("bot", "client") else "user"
+                            history.append(ChatMessage(role=role, content=m["body"]))
+                    
+                    # 2. Add current message
+                    history.append(ChatMessage(role="user", content=raw_body))
+                    
+                    # 3. Generate Response
+                    response_message = await generate_groq_response(
+                        messages=history,
+                        temperature=0.7,
+                        max_tokens=200
+                    )
+                    
+                    # Fallback if empty
+                    if not (response_message and response_message.strip()):
+                         response_message = "I received your message but couldn't generate a response. Please try again."
 
+                except Exception as e:
+                    logger.error(f"[AI] Failed to generate response: {e}")
+                    response_message = "Thanks for your message. We'll get back to you shortly."
+
+            logger.info(f"[DEBUG] Sending Reply: {response_message}")
             result = await WhatsAppService.send_simple_message(from_number, response_message)
             message_sid = result.get("message_sid") if isinstance(result, dict) else None
+            
             if thread_id and message_sid:
                 await ConversationService.add_message(
                     thread_id=thread_id,
@@ -405,6 +453,7 @@ def register_webhook_routes(app):
                     sender_type="bot",
                     twilio_message_sid=message_sid,
                 )
+                logger.info(f"[DEBUG] Outbound Reply Saved: {message_sid}")
 
             return Response(content="", media_type="application/xml")
         except Exception as exc:
@@ -481,12 +530,40 @@ def register_webhook_routes(app):
                     thread_id=thread_id,
                     body=raw_body,
                     direction="inbound",
-                    sender_type="user",
+                    sender_type="client",  # Fixed: Match DB constraint
                     twilio_message_sid=None,
                 )
                 await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "channel": "sms"})
 
+            # Generate AI Response using Groq (same logic as WhatsApp)
             response_message = "Thanks for your message. We'll get back to you shortly."
+            try:
+                # 1. Fetch recent history for context
+                history = []
+                if thread_id:
+                    # Get last 15 messages (Chronological)
+                    raw_msgs = await ConversationService.get_recent_messages(thread_id, limit=15)
+                    for m in raw_msgs:
+                        role = "assistant" if m["sender_type"] in ("bot", "agent") else "user"
+                        history.append(ChatMessage(role=role, content=m["body"]))
+                
+                # 2. Add current message
+                history.append(ChatMessage(role="user", content=raw_body))
+                
+                # 3. Generate Response
+                ai_response = await generate_groq_response(
+                    messages=history,
+                    temperature=0.7,
+                    max_tokens=150  # Keep SMS shorter
+                )
+                
+                if ai_response and ai_response.strip():
+                     response_message = ai_response.strip()
+
+            except Exception as e:
+                logger.error(f"[SMS AI] Failed to generate response: {e}")
+                # Fallback to default message
+
             twilio_service = TwilioService()
             result = await twilio_service.send_sms(from_number, response_message)
             message_sid = result.get("message_sid") if result.get("success") else None
@@ -771,6 +848,37 @@ async def _send_post_call_notifications(payload: CallCompletePayload, record: di
             logger.error(f"[PostCallNotifications] WhatsApp error: {e}")
     else:
         logger.debug("[PostCallNotifications] No valid phone number for WhatsApp")
+
+    # ----- SMS: send short summary after every call when we have a number -----
+    sms_number = await _get_phone_number_fallback()
+    if sms_number:
+        try:
+            sms_body = f"Call Summary for {payload.client_name}:\n{summary_text}"
+            twilio_service = TwilioService()
+            sms_result = await twilio_service.send_sms(sms_number, sms_body)
+            
+            if sms_result.get("success"):
+                logger.info(f"[PostCallNotifications] SMS summary sent to {sms_number}")
+                # Record in conversation
+                try:
+                    thread = await ConversationService.get_or_create_thread(sms_number, "sms")
+                    if thread.get("id"):
+                        await ConversationService.add_message(
+                            thread_id=thread["id"],
+                            body=sms_body,
+                            direction="outbound",
+                            sender_type="bot",
+                            twilio_message_sid=sms_result.get("message_sid"),
+                        )
+                        await dashboard_manager.broadcast("conversation_message", {"thread_id": thread["id"], "channel": "sms"})
+                except Exception as rec:
+                    logger.warning(f"[PostCallNotifications] Failed to record SMS in conversation: {rec}")
+            else:
+                logger.warning(f"[PostCallNotifications] SMS failed: {sms_result.get('error')}")
+        except Exception as e:
+            logger.error(f"[PostCallNotifications] SMS error: {e}")
+    else:
+        logger.debug("[PostCallNotifications] No valid phone number for SMS")
 
     # ----- Email: send brochure + summary after every call when we have an email -----
     email_address = _get_email_fallback()
