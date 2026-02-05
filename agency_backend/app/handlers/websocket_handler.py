@@ -119,7 +119,7 @@ class OutboundWebSocketHandler:
         if not name:
             name = "there"
         return (
-            f"Hey {name}, मैं Monica बोल रही हूँ TravelBuddy से. Um... उम्मीद है आप ठीक होंगे. मैंने देखा कि आप हाल ही में travel options explore कर रहे थे, तो बस एक quick check-in के लिए कॉल किया."
+            f"Hey {name}, मैं Monica बोल रही हूँ TravelBuddy से. Um...मैंने देखा कि आप हाल ही में travel options explore कर रहे थे, तो बस एक quick check-in के लिए कॉल किया."
         )
 
     def _build_dynamic_variables(self) -> dict:
