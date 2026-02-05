@@ -73,7 +73,7 @@ class WhatsAppService:
                 normalized_to_number = _to_strip
             
             # Format the WhatsApp number
-            whatsapp_to = f"whatsapp:{normalized_to_number}" if not normalized_to_number.startswith("whatsapp:") else normalized_to_number
+            whatsapp_to = f"whatsapp:+{normalized_to_number}" if not normalized_to_number.startswith("whatsapp:") else normalized_to_number
             whatsapp_from = f"whatsapp:{Config.TWILIO_WHATSAPP_NUMBER}"
             
             # Build the message content
@@ -118,14 +118,14 @@ class WhatsAppService:
                 await cls._send_interactive_buttons(
                     client, whatsapp_from, whatsapp_to, follow_up_date, call_id
                 )
-            
-                return {
+
+            return {
                 "success": True,
                 "message_sid": message.sid,
                 "to": to_number,
                 "status": message.status
             }
-            
+
         except Exception as e:
             logger.error(f"[WhatsApp] Failed to send message to {to_number}: {e}")
             return {
@@ -264,7 +264,14 @@ Reference: {call_id}"""
         try:
             client = cls._get_client()
             
-            whatsapp_to = f"whatsapp:{to_number}" if not to_number.startswith("whatsapp:") else to_number
+            # Normalize phone number
+            _to_strip = to_number.replace("whatsapp:", "").lstrip("+")
+            if not _to_strip.startswith("91") or len(_to_strip) == 10:
+                normalized_to_number = "91" + _to_strip
+            else:
+                normalized_to_number = _to_strip
+            
+            whatsapp_to = f"whatsapp:+{normalized_to_number}"
             whatsapp_from = f"whatsapp:{Config.TWILIO_WHATSAPP_NUMBER}"
             
             # Build message parameters

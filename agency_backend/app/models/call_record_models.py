@@ -1,6 +1,6 @@
 """Pydantic models for call record payloads and responses."""
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, date
+from typing import List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -89,7 +89,7 @@ class CallCompletePayload(BaseModel):
     sentiment: Optional[str] = Field(default=None, description="Call sentiment: positive | neutral | negative")
     timestamp: datetime
     summary: Optional[str] = Field(default=None, description="AI-generated call summary")
-    follow_up_date: Optional[str] = Field(default=None, description="Extracted follow-up date in YYYY-MM-DD format")
+    follow_up_date: Optional[Union[str, date]] = Field(default=None, description="Extracted follow-up date in YYYY-MM-DD format")
     notification_preferences: Optional[NotificationPreferences] = Field(default=None, description="User notification preferences")
     phone_number: Optional[str] = Field(default=None, description="Phone number used for the call")
     recording_url: Optional[str] = Field(default=None, description="URL to the call recording audio")

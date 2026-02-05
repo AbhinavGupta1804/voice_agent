@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class OutboundWebSocketHandler:
     """Handles WebSocket communication for outbound calls."""
     
-    def __init__(self, websocket: WebSocket, client_name: str = "", phone_number: str = ""):
+    def __init__(self, websocket: WebSocket, client_name: str = "", phone_number: str = "", follow_up_first_message: str = ""):
         """
         Initialize the handler.
         
@@ -23,6 +23,7 @@ class OutboundWebSocketHandler:
             websocket: WebSocket connection from Twilio
             client_name: Client name from query parameters
             phone_number: Phone number from query parameters
+            follow_up_first_message: Optional first message for follow-up calls (continuity from previous call).
         """
         self.websocket = websocket
         self.stream_sid: Optional[str] = None
@@ -31,6 +32,7 @@ class OutboundWebSocketHandler:
         self.elevenlabs_ws: Optional[websockets.WebSocketClientProtocol] = None
         self.client_name: str = client_name
         self.phone_number: str = phone_number
+        self.follow_up_first_message: str = follow_up_first_message
         self.elevenlabs_closed: bool = False  # Track if ElevenLabs connection is closed
     
     async def handle(self):
@@ -110,13 +112,14 @@ class OutboundWebSocketHandler:
             logger.error("[ElevenLabs] Failed to send conversation initiation payload: %s", exc)
 
     def _build_first_message(self) -> str:
-        """Create the agent's first message with the injected client name."""
+        """Create the agent's first message. Use LLM-generated follow-up message when present for continuity."""
+        if (self.follow_up_first_message or "").strip():
+            return self.follow_up_first_message.strip()
         name = (self.client_name or "").strip()
         if not name:
             name = "there"
-
         return (
-            f"“Hey {name}, मैं Monica बोल रही हूँ TravelBuddy से.Um... उम्मीद है आप ठीक होंगे.मैंने देखा कि आप हाल ही में travel options explore कर रहे थे, तो बस एक quick check-in के लिए कॉल किया.”"
+            f"Hey {name}, मैं Monica बोल रही हूँ TravelBuddy से. Um... उम्मीद है आप ठीक होंगे. मैंने देखा कि आप हाल ही में travel options explore कर रहे थे, तो बस एक quick check-in के लिए कॉल किया."
         )
 
     def _build_dynamic_variables(self) -> dict:
@@ -200,7 +203,8 @@ class OutboundWebSocketHandler:
                     if custom_params:
                         self.client_name = custom_params.get("client_name", "")
                         self.phone_number = custom_params.get("phone_number", "")
-                        logger.info(f"[Handler] Extracted from Stream params - Client: {self.client_name}, Phone: {self.phone_number}")
+                        self.follow_up_first_message = custom_params.get("follow_up_first_message", "")
+                        logger.info(f"[Handler] Extracted from Stream params - Client: {self.client_name}, Phone: {self.phone_number}, has_follow_up_first_message={bool(self.follow_up_first_message)}")
                         
                         # Now that we have all the info, re-initialize ElevenLabs with correct context
                         if self.elevenlabs_ws:

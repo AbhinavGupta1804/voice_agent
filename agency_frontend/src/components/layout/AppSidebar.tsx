@@ -3,6 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   Phone,
   History,
+  PhoneCall,
   BarChart3,
   Database,
   MessageSquare,
@@ -26,6 +27,7 @@ import { useTheme } from "@/hooks/use-theme";
 const navItems = [
   { title: "Make Call", url: "/make-call", icon: Phone },
   { title: "Call History", url: "/call-history", icon: History },
+  { title: "Follow-ups", url: "/follow-ups", icon: PhoneCall },
   { title: "Analytics", url: "/analytics", icon: BarChart3 },
   { title: "Custom Data", url: "/custom-data", icon: Database },
   { title: "Chat", url: "/chat", icon: MessageSquare },

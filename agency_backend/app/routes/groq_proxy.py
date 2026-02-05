@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = Config.GROQ_API_KEY if hasattr(Config, "GROQ_API_KEY") else None
 groq_client: Optional[Groq] = None
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "moonshotai/kimi-k2-instruct-0905"
 
 if GROQ_API_KEY:
     groq_client = Groq(api_key=GROQ_API_KEY)
