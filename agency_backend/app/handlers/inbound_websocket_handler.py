@@ -103,7 +103,7 @@ class InboundWebSocketHandler:
 
     def _build_first_message(self) -> str:
         """Create the agent's first message for inbound calls."""
-        return "“Hey Sir, मैं Monica बोल रही हूँ TravelBuddy से.Um... मैं आपकी कैसे मदद कर सकती हूँ?”"
+        return "Hey, मैं Priya बोल रही हूँ Naturals Ice Cream से. How can I help you today with our delicious handcrafted ice creams?"
 
     def _build_dynamic_variables(self) -> dict:
         """Assemble dynamic variables for the ElevenLabs conversation context."""

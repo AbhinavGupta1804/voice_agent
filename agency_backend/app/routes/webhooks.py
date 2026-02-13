@@ -364,7 +364,8 @@ def register_webhook_routes(app):
         request: Request,
         Body: str = Form(default=""),
         From: str = Form(default=""),
-        To: str = Form(default="")
+        To: str = Form(default=""),
+        MessageSid: str = Form(default=None)  # Add MessageSid parameter
     ):
         """
         Handle incoming WhatsApp messages: store in conversation thread, then reply (confirm/reschedule or generic bot).
@@ -395,7 +396,7 @@ def register_webhook_routes(app):
                         body=raw_body,
                         direction="inbound",
                         sender_type="client",  # CHANGED from 'user' to 'client' to match DB constraint
-                        twilio_message_sid=None,
+                        twilio_message_sid=MessageSid,  # Pass the captured MessageSid
                     )
                     logger.info(f"[DEBUG] Inbound Message Saved: {msg}")
                     await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "channel": "whatsapp"})
@@ -415,24 +416,55 @@ def register_webhook_routes(app):
                 try:
                     # 1. Fetch recent history for context
                     history = []
+                    
+                    # Fetch last call summary for context (Using ConversationService)
+                    last_call_context = ""
+                    try:
+                        last_call = await ConversationService.get_latest_call_context(from_number)
+                        if last_call:
+                            last_call_context = (
+                                f"\n\nRecent Interaction Context:\n"
+                                f"- Client Name: {last_call.get('client_name')}\n"
+                                f"- Last Call Summary: {last_call.get('summary')}\n"
+                                f"Use this context if relevant, but don't force it."
+                            )
+                            logger.info(f"[WhatsApp] Found last call context for {from_number}")
+                    except Exception as e:
+                        logger.warning(f"[WhatsApp] Failed to get call context: {e}")
+
+                    # Add Text-Channel Specific System Prompt with Context
+                    history.append(ChatMessage(role="system", content=f"""
+                    You are Neha, a helpful customer support agent for Naturals Ice Cream.
+                    Reply to the customer's text message in a friendly, concise, and professional manner.
+                    Do not mention being an AI or voice agent. Keep answers under 3 sentences.
+                    If you don't know something, offer to have a human agent call them back.
+                    {last_call_context}
+                    """))
+                    
                     if thread_id:
                         # Get last 15 messages (Chronological: Oldest -> Newest) using get_recent_messages
                         # This ensures we see the ACTUAL latest conversation, not just the first 10 ever.
                         raw_msgs = await ConversationService.get_recent_messages(thread_id, limit=15)
                         for m in raw_msgs:
-                            role = "assistant" if m["sender_type"] in ("bot", "client") else "user"
+                            role = "assistant" if m["sender_type"] in ("bot", "agent") else "user"
                             history.append(ChatMessage(role=role, content=m["body"]))
                     
                     # 2. Add current message
                     history.append(ChatMessage(role="user", content=raw_body))
                     
                     # 3. Generate Response
-                    response_message = await generate_groq_response(
+                    ai_result = await generate_groq_response(
                         messages=history,
                         temperature=0.7,
                         max_tokens=200
                     )
                     
+                    # Extract content from the message object
+                    if isinstance(ai_result, dict):
+                        response_message = ai_result.get("content") or ""
+                    else:
+                        response_message = str(ai_result)
+
                     # Fallback if empty
                     if not (response_message and response_message.strip()):
                          response_message = "I received your message but couldn't generate a response. Please try again."
@@ -511,7 +543,8 @@ def register_webhook_routes(app):
         request: Request,
         Body: str = Form(default=""),
         From: str = Form(default=""),
-        To: str = Form(default="")
+        To: str = Form(default=""),
+        MessageSid: str = Form(default=None)  # Add MessageSid parameter
     ):
         """
         Handle incoming SMS: store in conversation thread, then send bot ack via SMS.
@@ -531,7 +564,7 @@ def register_webhook_routes(app):
                     body=raw_body,
                     direction="inbound",
                     sender_type="client",  # Fixed: Match DB constraint
-                    twilio_message_sid=None,
+                    twilio_message_sid=MessageSid,  # Pass the captured MessageSid
                 )
                 await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "channel": "sms"})
 
@@ -540,6 +573,28 @@ def register_webhook_routes(app):
             try:
                 # 1. Fetch recent history for context
                 history = []
+                
+                # Fetch last call summary for context (SMS channel)
+                last_call_context = ""
+                try:
+                    last_call = await ConversationService.get_latest_call_context(from_number)
+                    if last_call:
+                        last_call_context = (
+                            f"\n\nRecent Interaction Context:\n"
+                            f"- Client Name: {last_call.get('client_name')}\n"
+                            f"- Last Call Summary: {last_call.get('summary')}\n"
+                        )
+                except Exception:
+                    pass
+
+                # Add Text-Channel Specific System Prompt
+                history.append(ChatMessage(role="system", content=f"""
+                You are Neha, a helpful customer support agent for Naturals Ice Cream.
+                Reply to the customer's SMS in a friendly, concise, and professional manner.
+                Keep answers very short (under 160 chars if possible).
+                {last_call_context}
+                """))
+                
                 if thread_id:
                     # Get last 15 messages (Chronological)
                     raw_msgs = await ConversationService.get_recent_messages(thread_id, limit=15)
@@ -551,14 +606,21 @@ def register_webhook_routes(app):
                 history.append(ChatMessage(role="user", content=raw_body))
                 
                 # 3. Generate Response
-                ai_response = await generate_groq_response(
+                ai_result = await generate_groq_response(
                     messages=history,
                     temperature=0.7,
                     max_tokens=150  # Keep SMS shorter
                 )
                 
-                if ai_response and ai_response.strip():
-                     response_message = ai_response.strip()
+                # Extract content from the message object
+                ai_response_text = ""
+                if isinstance(ai_result, dict):
+                    ai_response_text = ai_result.get("content") or ""
+                else:
+                    ai_response_text = str(ai_result)
+                
+                if ai_response_text and ai_response_text.strip():
+                     response_message = ai_response_text.strip()
 
             except Exception as e:
                 logger.error(f"[SMS AI] Failed to generate response: {e}")

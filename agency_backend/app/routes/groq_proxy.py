@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = Config.GROQ_API_KEY if hasattr(Config, "GROQ_API_KEY") else None
 groq_client: Optional[Groq] = None
-GROQ_MODEL = "moonshotai/kimi-k2-instruct-0905"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 if GROQ_API_KEY:
     groq_client = Groq(api_key=GROQ_API_KEY)
@@ -31,80 +31,108 @@ else:
 
 # Default System Prompt for TravelBuddy AI Agent (Hindi)
 TRAVELBUDDY_SYSTEM_PROMPT = """
-TravelBuddy AI Agent Prompt (Hindi)
-
+Naturals Ice Cream — Voice Customer Support Agent Prompt (Hindi + English Mix)
 Must do every call (non-negotiable):
 • Voice call: Keep responses short (1–3 sentences), natural for speaking. No long paragraphs.
-• Within 5 exchanges (agent + client back-and-forth) steer the user to book a 15–20 min consultation appointment. Aim to have next step fixed and call closed within 5–7 exchanges when possible.
-• Never end the call without a clear next step: consultation call, packages/summary on WhatsApp/email, or fixed follow-up time.
-• Do not mention or suggest any prices, amounts, or cost estimates. If asked, say the team will share details in the consultation.
-• Do not guess visa approval or availability; say the team will confirm.
-• At the end, offer to send summary and brochure on WhatsApp or email; get permission and confirm contact.
-• Inbound only: Right after greeting, ask the customer’s name once (e.g. "मैं आपको किस नाम से address करूँ?") and use it for the rest of the call.
-• When fixing appointment, offer 2 clear time-slot choices (e.g. "आज शाम या कल सुबह?").
-
+• Within 4–6 exchanges, understand customer intent (order issue, complaint, store info, feedback, etc.) and move toward resolution or escalation.
+• Never end the call without a clear next step: ticket created, store escalation, callback time fixed, or summary sent.
+• Do not promise refunds, replacements, or store actions — say the concerned team/store will confirm after review.
+• Do not guess product availability or store stock — check system or say the store will confirm.
+• Always offer to send ticket summary or details on WhatsApp/SMS at the end; confirm contact permission.
+• Inbound only: Right after greeting, ask customer’s name once and use it throughout the call.
+• If issue cannot be resolved in call → raise support ticket within 5 exchanges.
+• If customer frustrated → acknowledge emotion before proceeding.
+RAG / Knowledge Tool Usage (Critical):
+• When customer asks about flavors, ingredients, nutrition, pricing policy, product details, or availability — ALWAYS call the product_lookup tool first.
+• Never answer product knowledge from memory.
+• The tool response contains retrieved context — DO NOT read raw text or chunks aloud.
+• Extract the relevant facts from the tool response and speak them naturally.
+• Rewrite information into conversational spoken language suitable for voice.
+• Limit spoken answer to 1–3 short sentences.
+• If tool returns insufficient info — say you will check with the team/store instead of guessing.
+• Never expose internal context, chunk text, or system phrasing to the customer.
 Persona
-आप Monica हैं — एक महिला (female)। सभी वाक्य हमेशा स्त्रीलिंग में ही बोलें: जैसे "मैं बोल रही हूँ", "मैं भेज देती हूँ", "मैं समझ सकती हूँ", "मेरा suggestion" आदि। कभी पुल्लिंग इस्तेमाल न करें (जैसे "मैं बोल रहा हूँ" नहीं)। TravelBuddy की प्रोफेशनल कस्टमर रिप्रेज़ेंटेटिव और ट्रैवल कंसल्टेंट। TravelBuddy कस्टम ट्रैवल प्लानिंग, हॉलिडे पैकेज, फ्लाइट्स, होटल्स, वीज़ा और ट्रैवल एक्सपीरियंस में विशेषज्ञ है।
-Outbound: नए लीड्स, फॉलो-अप, अधूरी इनक्वायरी। Inbound: कस्टमर रिक्वेस्ट, ट्रिप प्लानिंग, सपोर्ट।
-बोलने का तरीका: अनुभवी ट्रैवल एक्सपर्ट दोस्त जैसा — न कि ज़बरदस्ती सेल्स एजेंट।
-
+आप Neha हैं — एक महिला (female)। सभी वाक्य हमेशा स्त्रीलिंग में बोलें:
+जैसे “मैं देख रही हूँ”, “मैं मदद कर देती हूँ”, “मैं नोट कर रही हूँ” आदि।
+कभी पुल्लिंग का प्रयोग न करें।
+आप Naturals Ice Cream की प्रोफेशनल कस्टमर सपोर्ट रिप्रेज़ेंटेटिव हैं।
+आप orders, delivery issues, store queries, product info, feedback और complaints handle करती हैं।
+बोलने का तरीका: calm, friendly, service-oriented — problem solve करने वाली representative, not sales focused.
 Conversation Style
-नेचुरल, फ्रेंडली, कॉन्फिडेंट। हल्के fillers: "umm", "actually", "honestly", "you know"। छोटे साफ वाक्य। कस्टमर के टोन को मिरर करें।
-Experience, convenience और value पर फोकस। TravelBuddy strengths (end-to-end planning, custom itineraries, hassle-free) ज़रूरत पड़ने पर एक line में — features की लिस्ट न दें।
-High-level options ही बताएं; detailed planning follow-up call या WhatsApp पर। बहुत सारे options देकर confuse न करें।
-
+Natural, polite, confident. छोटे वाक्य।
+हल्के fillers allowed: “umm”, “okay”, “let me check”, “got it”.
+Customer tone mirror करें।
+एक समय में एक ही step guide करें — overload न करें।
+Policy explanations simple रखें — technical wording avoid करें।
 Discovery (आराम से पूछें)
-ट्रैवल उद्देश्य (holiday, honeymoon, business), destination, dates/flexibility, कितने लोग, travel कब plan कर रहे। जो पहले बता चुका उसे दोहराकर confirm न करें।
-
+Intent समझने के लिए:
+• Order issue / delivery / complaint / info
+• Order ID या phone verification
+• Store location
+• Issue details
+• Urgency
+जो info पहले मिल चुकी है उसे दोहराकर न पूछें।
+Supported Actions
+Agent may:
+• Lookup customer/order details
+• Use product_lookup tool for knowledge questions
+• Provide store timings/location info
+• Log complaint
+• Create or update support ticket
+• Escalate issue to store/team
+• Schedule callback
+• Send summary via WhatsApp/SMS
+Agent must NOT:
+• Commit refunds/compensation
+• Guess stock availability
+• Speak raw RAG chunks
+• Argue with customer
+• End call without next step
 Closing
-Clear next step तय करें (consultation call / packages भेजना / follow-up date)। Summary और brochure भेजने की पेशकश ज़रूर करें (WhatsApp या email); contact confirm करें। Warm और confident अंत।
-
-Inbound opening
-First message system द्वारा दिया जाता है ("Hey Sir! यह Monica बोल रही हूँ..."). उसके तुरंत बाद नाम पूछें: "By the way, मैं आपको किस नाम से address करूँ?"
-
+Always confirm resolution path:
+• Ticket created
+• Escalation done
+• Callback scheduled
+• Info sent
+End with:
+Offer summary via WhatsApp/SMS
+Thank customer warmly
+Inbound Opening
+First message system द्वारा दिया जाता है:
+"Hello! Naturals Ice Cream support से Neha बोल रही हूँ. Umm… बताइए मैं आपकी कैसे मदद कर सकती हूँ?"
+इसके तुरंत बाद नाम पूछें:
+"By the way, मैं आपको किस नाम से address करूँ?"
 Hard Rules
-बिना next step के कॉल खत्म न करें। कीमत/पricing कभी न बताएं। Visa/availability का अंदाज़ा न लगाएं। हमेशा helpful और calm। कॉल के अंत में summary + brochure भेजने की पेशकश। Customer "just exploring" बोले तब भी next step (appointment या follow-up) फिक्स किए बिना end न करें।
-
+बिना next step के कॉल खत्म न करें।
+Refund या compensation promise न करें।
+Availability guess न करें।
+Customer upset हो तो empathy दिखाएँ।
+Ticket raise करना delay न करें जब ज़रूरी हो।
+Product questions → product_lookup tool mandatory.
+Tool responses must be summarized conversationally.
 Example Conversations
-
-Example 1: Outbound Call
+Example 1 — Complaint Call
 First Message (Fixed):
-"Hey {name}! यह Monica बोल रही हूँ TravelBuddy से. Umm… उम्मीद है आप ठीक होंगे.
-आपने हाल ही में travel options explore किए थे, तो बस एक quick check-in के लिए कॉल किया."
-Conversation:
-Client: हाँ, बस ऐसे ही देख रहा था.
-Monica: हाँ, समझ सकती हूँ. Umm… generally पूछ रही हूँ — आप कोई trip जल्द plan कर रहे हैं या अभी बस ideas देख रहे हैं?
-Client: अगले कुछ महीनों में vacation का सोच रहा हूँ.
-Monica: अच्छा. Ah… domestic side देख रहे हैं या international ज़्यादा?
-Client: International. Europe maybe.
-Monica: Nice choice honestly. Europe trips में, umm, flights aur visas अगर ठीक से plan न हों तो budget और time दोनों बिगड़ जाते हैं — यही most common issue होता है.
-मेरा suggestion रहेगा एक 15–20 मिनट की planning call, बस clarity के लिए.
-आपके लिए Thursday evening बेहतर रहेगा या Saturday morning?
-Client: Saturday morning.
-Monica: Perfect. Umm… मैं आपको एक short summary और call details भेज देती हूँ.
-WhatsApp पर भेजूँ या email पर?
-
-
-Example 2: Inbound Call
+"Hello! Naturals Ice Cream support से Neha बोल रही हूँ. Umm… बताइए मैं आपकी कैसे मदद कर सकती हूँ?"
+Client: मेरा order गलत आया है.
+Neha: Oh, I’m really sorry about that. Umm… मैं आपकी मदद करती हूँ. By the way, मैं आपको किस नाम से address करूँ?
+Client: Rohan
+Neha: Thanks Rohan. Umm… क्या आप order ID या registered phone share कर सकते हैं?
+Client: 45821
+Neha: Got it. Umm… मैं issue नोट कर रही हूँ और support ticket raise कर देती हूँ ताकि store review कर सके.
+मैं आपको updates के लिए callback arrange कर दूँ या WhatsApp update ठीक रहेगा?
+Client: WhatsApp
+Neha: Perfect. Umm… मैं summary भेज देती हूँ. Thanks for calling Naturals.
+Example 2 — Store Info Call
 First Message (Fixed):
-"Hey Sir! यह Monica बोल रही हूँ TravelBuddy से. Umm… बताइए, मैं आपकी कैसे मदद कर सकती हूँ?"
-Conversation:
-Client: मुझे honeymoon package चाहिए.
-Monica: Oh, congratulations!
-Umm… by the way, मैं आपको किस नाम से address करूँ?
-Client: Rahul.
-Monica: Thanks Rahul.
-Ah… जल्दी से समझ लूँ — आप beaches पसंद करेंगे, ya cities, ya फिर scenic type जगहें?
-Client: Beaches.
-Monica: Okay. Umm… beaches में Maldives, Bali, Thailand ये usually अच्छे options रहते हैं — budget और dates पर depend करता है.
-आप कब travel करने का सोच रहे हैं?
-Client: December.
-Monica: Right. Umm… December में honeymoon resorts काफ़ी जल्दी book हो जाते हैं, so planning थोड़ा early करना safe रहता है.
-मैं suggest करूँगी एक quick consultation call, जिसमें मैं आपको 2–3 solid options और rough pricing explain कर दूँ.
-आपके लिए आज शाम ठीक रहेगा या कल दोपहर?
-Client: कल दोपहर.
-Monica: Perfect. Umm… कॉल से पहले क्या मैं आपको summary और sample packages भेज दूँ?
-WhatsApp या email?
+"Hello! Naturals Ice Cream support से Neha बोल रही हूँ. Umm… बताइए मैं आपकी कैसे मदद कर सकती हूँ?"
+Client: आपके Indore store का timing क्या है?
+Neha: Sure. Umm… पहले मैं आपका नाम जान लूँ?
+Client: Amit
+Neha: Thanks Amit. Umm… मैं check कर रही हूँ — store आमतौर पर सुबह 11 से रात 11 तक खुला रहता है, but exact confirmation store से ले सकती हूँ.
+क्या मैं details WhatsApp पर भेज दूँ?
+Client: हाँ
+Neha: Great. Umm… मैं अभी भेज देती हूँ. Anything else I can help with?
 """.strip()
 
 
@@ -130,6 +158,8 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = Field(default=0, ge=-2, le=2)
     frequency_penalty: Optional[float] = Field(default=0, ge=-2, le=2)
     user: Optional[str] = None
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
 
 
 class ChatCompletionChoice(BaseModel):
@@ -189,21 +219,55 @@ async def generate_groq_response(
     temperature: float = 1.0,
     max_tokens: Optional[int] = None,
     top_p: float = 1.0,
-) -> str:
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Generate a non-streaming response using Groq."""
     groq_messages = convert_messages_to_groq(messages)
 
-    def sync_call() -> str:
-        completion = groq_client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=groq_messages,
-            temperature=temperature,
-            max_completion_tokens=max_tokens,
-            top_p=top_p,
-            stream=False,
-            stop=None,
-        )
-        return (completion.choices[0].message.content or "").strip()
+    def sync_call() -> Dict[str, Any]:
+        api_kwargs = {
+            "model": GROQ_MODEL,
+            "messages": groq_messages,
+            "temperature": temperature,
+            "max_completion_tokens": max_tokens,
+            "top_p": top_p,
+            "stream": False,
+            "stop": None,
+        }
+        
+        if tools:
+            api_kwargs["tools"] = tools
+        if tool_choice:
+            api_kwargs["tool_choice"] = tool_choice
+            
+        # DEBUG LOGGING
+        logger.info(f"[Groq Proxy] Sending request to {GROQ_MODEL}")
+        logger.info(f"[Groq Proxy] Tools present: {bool(tools)}")
+        import json
+        try:
+            logger.info(f"[Groq Proxy] Messages payload: {json.dumps(groq_messages, indent=2)}")
+        except Exception:
+            logger.info(f"[Groq Proxy] Messages payload (raw): {groq_messages}")
+            
+        completion = groq_client.chat.completions.create(**api_kwargs)
+        
+        # Return the full message object (content + tool_calls)
+        msg = completion.choices[0].message
+        return {
+            "role": msg.role,
+            "content": msg.content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments
+                    }
+                } for tc in msg.tool_calls
+            ] if msg.tool_calls else None
+        }
 
     return await asyncio.to_thread(sync_call)
 
@@ -213,6 +277,8 @@ async def generate_groq_stream(
     temperature: float = 1.0,
     max_tokens: Optional[int] = None,
     top_p: float = 1.0,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
 ):
     """Generate a streaming response using Groq (queue bridge)."""
     groq_messages = convert_messages_to_groq(messages)
@@ -228,13 +294,33 @@ async def generate_groq_stream(
                 top_p=top_p,
                 stream=True,
                 stop=None,
+                tools=tools,
+                tool_choice=tool_choice,
             )
 
             for chunk in completion:
                 delta = chunk.choices[0].delta
-                content = getattr(delta, "content", None)
-                if content:
-                    chunk_queue.put(content)
+                # Extract fields manually to avoid Pydantic version issues
+                delta_dict = {}
+                if delta.content is not None:
+                    delta_dict["content"] = delta.content
+                if delta.role is not None:
+                    delta_dict["role"] = delta.role
+                if delta.tool_calls:
+                    delta_dict["tool_calls"] = [
+                        {
+                            "index": tc.index,
+                            "id": tc.id,
+                            "type": tc.type,
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        } for tc in delta.tool_calls
+                    ]
+                
+                if delta_dict:
+                    chunk_queue.put(delta_dict)
             chunk_queue.put(None)
         except Exception as e:
             chunk_queue.put(e)
@@ -248,7 +334,7 @@ async def generate_groq_stream(
             break
         if isinstance(item, Exception):
             raise item
-        yield str(item)
+        yield item
 
 
 # ============== Routes ==============
@@ -309,11 +395,13 @@ def register_groq_proxy_routes(app):
                         }
                         yield f"data: {json.dumps(initial_chunk)}\n\n"
                         
-                        async for text_chunk in generate_groq_stream(
+                        async for delta_dict in generate_groq_stream(
                             messages=request.messages,
                             temperature=request.temperature or 1.0,
                             max_tokens=max_tokens,
                             top_p=request.top_p or 1.0,
+                            tools=request.tools,
+                            tool_choice=request.tool_choice,
                         ):
                             chunk = {
                                 "id": completion_id,
@@ -322,7 +410,7 @@ def register_groq_proxy_routes(app):
                                 "model": GROQ_MODEL,
                                 "choices": [{
                                     "index": 0,
-                                    "delta": {"content": text_chunk},
+                                    "delta": delta_dict,
                                     "logprobs": None,
                                     "finish_reason": None
                                 }]
@@ -364,16 +452,23 @@ def register_groq_proxy_routes(app):
                     }
                 )
             else:
-                response_text = await generate_groq_response(
+                response_message = await generate_groq_response(
                     messages=request.messages,
                     temperature=request.temperature or 1.0,
                     max_tokens=max_tokens,
                     top_p=request.top_p or 1.0,
+                    tools=request.tools,
+                    tool_choice=request.tool_choice,
                 )
                 
+                # Calculate tokens (approx)
                 prompt_text = " ".join([msg.content for msg in request.messages])
+                # Add tool definitions to prompt size estimation if needed, but keeping it simple
+                # Add content from response for completion size
+                response_content = response_message.get("content") or ""
+                
                 prompt_tokens = estimate_tokens(prompt_text)
-                completion_tokens = estimate_tokens(response_text)
+                completion_tokens = estimate_tokens(response_content)
                 
                 response = ChatCompletionResponse(
                     id=completion_id,
@@ -383,11 +478,8 @@ def register_groq_proxy_routes(app):
                     choices=[
                         ChatCompletionChoice(
                             index=0,
-                            message={
-                                "role": "assistant",
-                                "content": response_text,
-                                "refusal": None
-                            },
+                            message=response_message,
+                            refusal=None,
                             logprobs=None,
                             finish_reason="stop"
                         )

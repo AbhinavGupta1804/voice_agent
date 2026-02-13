@@ -13,6 +13,7 @@ import {
   Moon,
   Sun,
   ChevronUp,
+  AlertCircle,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -27,6 +28,7 @@ import { useTheme } from "@/hooks/use-theme";
 const navItems = [
   { title: "Make Call", url: "/make-call", icon: Phone },
   { title: "Call History", url: "/call-history", icon: History },
+  { title: "Complaints", url: "/complaints", icon: AlertCircle },
   { title: "Follow-ups", url: "/follow-ups", icon: PhoneCall },
   { title: "Analytics", url: "/analytics", icon: BarChart3 },
   { title: "Custom Data", url: "/custom-data", icon: Database },

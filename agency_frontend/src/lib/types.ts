@@ -229,3 +229,14 @@ export interface ThreadMessagesResponse {
   messages: ConversationMessage[];
 }
 
+export interface Ticket {
+  ticket_id: number;
+  customer_name: string;
+  phone_number: string | null;
+  issue_description: string;
+  priority: "High" | "Medium" | "Low";
+  status: "Open" | "Closed" | "In Progress" | "Resolved";
+  created_at: string;
+  updated_at: string;
+}
+

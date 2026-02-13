@@ -11,6 +11,7 @@ import Analytics from "./pages/Analytics";
 import CustomData from "./pages/CustomData";
 import Chat from "./pages/Chat";
 import Account from "./pages/Account";
+import Complaints from "./pages/Complaints";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -30,6 +31,7 @@ const App = () => (
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/custom-data" element={<CustomData />} />
             <Route path="/chat" element={<Chat />} />
+            <Route path="/complaints" element={<Complaints />} />
             <Route path="/account" element={<Account />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

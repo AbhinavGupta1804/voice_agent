@@ -21,8 +21,12 @@ from .routes import (
     register_inbound_routes,
     register_groq_proxy_routes,
 )
+from .routes.elevenlabs_tools import register_elevenlabs_tools_routes
+from .routes.tickets import router as tickets_router
 
-# Audio recordings are now stored in Cloudflare R2, not locally
+# ... (existing code) ...
+
+
 
 
 # Configure logging
@@ -219,6 +223,8 @@ register_dashboard_routes(app)
 register_webhook_routes(app)
 register_analytics_routes(app)
 register_groq_proxy_routes(app)
+register_elevenlabs_tools_routes(app)
+app.include_router(tickets_router)
 
 
 if __name__ == "__main__":
