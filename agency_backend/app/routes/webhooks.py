@@ -24,7 +24,9 @@ from ..services.openai_service import OpenAIService
 from ..services.email_service import EmailService
 from ..services.whatsapp_service import WhatsAppService
 from ..services.twilio_service import TwilioService
+from ..services.ticket_service import TicketService
 from ..utils.webhook_security import verify_hmac_signature
+from ..utils.phone_utils import normalize_phone_number
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +374,8 @@ def register_webhook_routes(app):
         """
         try:
             raw_body = (Body or "").strip()
-            from_number = (From or "").replace("whatsapp:", "").strip()
+            # Normalize the phone number using our utility
+            from_number = normalize_phone_number((From or "").replace("whatsapp:", "").strip())
             
             logger.info(f"[DEBUG] Webhook triggered. From: {from_number}, Body: {raw_body}")
 
@@ -552,7 +555,7 @@ def register_webhook_routes(app):
         """
         try:
             raw_body = (Body or "").strip()
-            from_number = (From or "").strip()
+            from_number = normalize_phone_number((From or "").strip())
             if not from_number:
                 return Response(content="<Response></Response>", media_type="application/xml")
 
@@ -876,12 +879,39 @@ async def _send_post_call_notifications(payload: CallCompletePayload, record: di
     whatsapp_number = await _get_phone_number_fallback()
     if whatsapp_number:
         try:
+            # Check for recent support ticket (created in last 10 mins)
+            latest_ticket_id = None
+            latest_issue = None
+            
+            try:
+                tickets = await TicketService.get_ticket_status(whatsapp_number)
+                if tickets:
+                    latest = tickets[0]
+                    # Check if created recently (e.g. within last 10 mins)
+                    # Ensure timezone awareness (created_at from DB is usually naive or UTC)
+                    now_utc = datetime.now(timezone.utc)
+                    
+                    # Convert ticket time to aware UTC if it's naive
+                    ticket_time = latest.created_at
+                    if ticket_time.tzinfo is None:
+                        ticket_time = ticket_time.replace(tzinfo=timezone.utc)
+                        
+                    time_diff = now_utc - ticket_time
+                    if time_diff.total_seconds() < 600:  # 10 minutes
+                        latest_ticket_id = latest.ticket_id
+                        latest_issue = latest.issue_description
+                        logger.info(f"[PostCallNotifications] Found recent ticket #{latest.ticket_id}")
+            except Exception as e:
+                logger.warning(f"[PostCallNotifications] Failed to check tickets: {e}")
+
             whatsapp_result = await WhatsAppService.send_call_summary_whatsapp(
                 to_number=whatsapp_number,
                 client_name=payload.client_name,
                 summary=summary_text,
                 follow_up_date=payload.follow_up_date,
                 call_id=payload.call_id,
+                ticket_id=latest_ticket_id,
+                issue=latest_issue
             )
             if whatsapp_result is None:
                 whatsapp_result = {"success": False, "error": "No response from WhatsApp service"}

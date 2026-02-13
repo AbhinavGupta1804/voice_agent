@@ -38,79 +38,68 @@ class WhatsAppService:
         client_name: str,
         summary: str,
         follow_up_date: Optional[str] = None,
-        call_id: Optional[str] = None,
-        include_brochure: bool = True
+        include_brochure: bool = True,
+        ticket_id: Optional[int] = None,
+        issue: Optional[str] = None,
+        call_id: Optional[str] = None
     ) -> dict:
         """
-        Send a call summary via WhatsApp with optional brochure attachment.
+        Send a call summary or ticket confirmation via WhatsApp.
         
         Args:
-            to_number: Recipient phone number in E.164 format (e.g., +1234567890).
+            to_number: Recipient phone number.
             client_name: Name of the client.
-            summary: AI-generated call summary.
-            follow_up_date: Follow-up date in YYYY-MM-DD format (optional).
-            call_id: Call ID for callback reference (optional).
-            include_brochure: Whether to include the brochure PDF (default: True).
-            
-        Returns:
-            dict: Response containing message SID and status.
-            
-        Raises:
-            Exception: If message sending fails.
+            summary: Call summary.
+            follow_up_date: Optional follow-up date.
+            include_brochure: Whether to attach brochure.
+            ticket_id: Optional Ticket ID if a support ticket was raised.
+            issue: Optional Issue description for the ticket.
         """
         try:
             client = cls._get_client()
             
-            # Normalize phone number: Always ensure it starts with '91' for Indian numbers
-            # Remove 'whatsapp:' prefix if present
-            _to_strip = to_number.replace("whatsapp:", "")
-            # Remove '+' if present
-            _to_strip = _to_strip.lstrip("+")
+            # Normalize phone number logic...
+            _to_strip = to_number.replace("whatsapp:", "").replace("+", "").strip()
             # If it doesn't start with '91', add it
             if not _to_strip.startswith("91") or len(_to_strip) == 10:
                 normalized_to_number = "91" + _to_strip
             else:
                 normalized_to_number = _to_strip
             
-            # Format the WhatsApp number
-            whatsapp_to = f"whatsapp:+{normalized_to_number}" if not normalized_to_number.startswith("whatsapp:") else normalized_to_number
+            whatsapp_to = f"whatsapp:+{normalized_to_number}"
             whatsapp_from = f"whatsapp:{Config.TWILIO_WHATSAPP_NUMBER}"
             
-            # Build the message content
-            follow_up_text = f"\n\n📅 *Scheduled Follow-up:* {follow_up_date}" if follow_up_date else ""
-            
-            message_body = f"""
-                📞 *Call Summary for {client_name}*
+            # --- Message Template Logic ---
+            # --- Message Template Logic ---
+            if ticket_id and issue:
+                # TICKET TEMPLATE
+                message_body = f"""
+👋 *Hello {client_name},*
 
-                Hello {client_name}! Thank you for your recent call. Here's a summary of our conversation:
+Thank you for reaching out to Naturals Ice Cream.
 
-                📝 *Summary:*
-                {summary}{follow_up_text}
+✅ We have registered your complaint against:
+*{issue}*
 
-                📎 *Attached:* Our brochure with more information about our services.
+🎫 *Ticket ID:* #{ticket_id}
 
-                ---
-                _This is an automated message from DevFuzzion Voice Assistant._ 
-            """
+We will contact you soon to resolve this.
+                """
+                
+                
 
-            # Build message parameters
-            message_params = {
-                "from_": whatsapp_from,
-                "to": whatsapp_to,
-                "body": message_body
-            }
-            
-            # Add brochure media URL if enabled
-            if include_brochure:
-                brochure_url = Config.get_brochure_url()
-                message_params["media_url"] = [brochure_url]
-                logger.info(f"[WhatsApp] Including brochure media: {brochure_url}")
-
-            # Send the message using Twilio's WhatsApp API with retry logic
-            message = await cls._send_with_retry(
-                client, message_params, to_number
-            )
-            
+                # Build params
+                message_params = {
+                    "from_": whatsapp_from,
+                    "to": whatsapp_to,
+                    "body": message_body
+                }
+                
+                # Send the message using Twilio's WhatsApp API with retry logic
+                message = await cls._send_with_retry(
+                    client, message_params, to_number
+                )
+                
             logger.info(f"[WhatsApp] Message sent successfully to {to_number}, sid: {message.sid}")
             
             # If follow-up date exists, send interactive message with buttons
@@ -118,13 +107,22 @@ class WhatsAppService:
                 await cls._send_interactive_buttons(
                     client, whatsapp_from, whatsapp_to, follow_up_date, call_id
                 )
-
-            return {
-                "success": True,
-                "message_sid": message.sid,
-                "to": to_number,
-                "status": message.status
-            }
+                
+                return {
+                    "success": True,
+                    "message_sid": message.sid,
+                    "to": to_number,
+                    "status": message.status
+                }
+            else:
+                # If no ticket, do NOT send anything
+                logger.info(f"[WhatsApp] No ticket raised for {to_number}, skipping WhatsApp notification.")
+                return {
+                    "success": True,  # Return true to indicate no error occurred (just skipped)
+                    "message_sid": None,
+                    "to": to_number,
+                    "status": "skipped"
+                }
 
         except Exception as e:
             logger.error(f"[WhatsApp] Failed to send message to {to_number}: {e}")

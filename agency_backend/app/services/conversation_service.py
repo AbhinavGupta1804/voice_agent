@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import asyncpg
 
 from ..db.postgres import get_db_pool
+from ..utils.phone_utils import normalize_phone_number
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +44,7 @@ class ConversationService:
                 raise ValueError("phone_number required for whatsapp/sms")
             
             # Normalize phone number to prevent duplicates
-            phone_number = str(phone_number).strip().replace("whatsapp:", "")
-            # Remove any unwanted characters like spaces or dashes
-            phone_number = "".join(c for c in phone_number if c.isdigit() or c == '+')
-            
-            # Ensure proper E.164 format with '+'
-            if not phone_number.startswith('+'):
-                # Handle common case where '91' is present but '+' is missing
-                phone_number = "+" + phone_number
+            phone_number = normalize_phone_number(str(phone_number))
             
             email_address = None
         try:

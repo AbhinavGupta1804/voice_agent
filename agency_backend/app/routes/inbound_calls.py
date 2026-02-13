@@ -62,10 +62,17 @@ def register_inbound_routes(app):
                 
                 logger.info(f"[VoiceWebhook] Generated WebSocket URL: {ws_stream_url}")
                 
+                # Extract caller info to pass to the stream
+                from_number = form_dict.get('From', '')
+                caller_name = form_dict.get('CallerName', '')
+
                 twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Stream url="{ws_stream_url}" />
+        <Stream url="{ws_stream_url}">
+            <Parameter name="from" value="{from_number}" />
+            <Parameter name="callerName" value="{caller_name}" />
+        </Stream>
     </Connect>
 </Response>"""
                 

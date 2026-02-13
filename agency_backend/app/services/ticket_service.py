@@ -7,6 +7,8 @@ import asyncpg
 from ..db.postgres import get_db_pool
 from ..models.ticket_models import TicketCreate, TicketResponse
 
+from ..utils.phone_utils import normalize_phone_number
+
 logger = logging.getLogger(__name__)
 
 class TicketService:
@@ -16,6 +18,10 @@ class TicketService:
     async def create_ticket(ticket_data: TicketCreate) -> Optional[TicketResponse]:
         """Create a new support ticket."""
         pool = await get_db_pool()
+        
+        # Normalize phone number
+        phone_normalized = normalize_phone_number(ticket_data.phone_number)
+        
         try:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow("""
@@ -25,7 +31,7 @@ class TicketService:
                     RETURNING ticket_id, customer_name, phone_number, issue_description, priority, status, created_at, updated_at
                 """, 
                 ticket_data.customer_name,
-                ticket_data.phone_number,
+                phone_normalized,
                 ticket_data.issue_description,
                 ticket_data.priority
                 )
@@ -58,6 +64,10 @@ class TicketService:
     async def get_ticket_status(phone_number: str) -> List[TicketResponse]:
         """Get all tickets for a specific phone number."""
         pool = await get_db_pool()
+        
+        # Normalize lookup for consistency
+        phone_normalized = normalize_phone_number(phone_number)
+        
         try:
             async with pool.acquire() as conn:
                 rows = await conn.fetch("""
@@ -65,7 +75,7 @@ class TicketService:
                     FROM support_tickets
                     WHERE phone_number = $1
                     ORDER BY created_at DESC
-                """, phone_number)
+                """, phone_normalized)
                 
                 return [TicketResponse(**dict(row)) for row in rows]
         except Exception as e:

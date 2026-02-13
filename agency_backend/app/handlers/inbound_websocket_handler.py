@@ -134,20 +134,26 @@ class InboundWebSocketHandler:
                         self.call_sid = start_data.get("callSid")
                         
                         # Extract phone number from multiple possible fields
+                        # Extract phone number from multiple possible fields
+                        custom_params = start_data.get("customParameters", {})
                         self.caller_phone = (
+                            custom_params.get("from") or
                             start_data.get("callerPhoneNumber") or 
                             start_data.get("from") or 
                             start_data.get("caller") or
                             ""
                         )
                         
-                        logger.info(f"[InboundHandler] Call started - SID: {self.call_sid}, Caller: {self.caller_phone}")
+                        # Extract caller name if available
+                        client_name = custom_params.get("callerName") or "Customer"
+                        
+                        logger.info(f"[InboundHandler] Call started - SID: {self.call_sid}, Caller: {self.caller_phone}, Name: {client_name}")
                         
                         # Store call metadata for webhook lookup
                         if self.call_sid and self.caller_phone:
                             await CallRecordService.store_call_metadata(
                                 call_sid=self.call_sid,
-                                client_name="Customer",
+                                client_name=client_name,
                                 phone_number=self.caller_phone,
                                 call_type="inbound"
                             )
@@ -167,6 +173,9 @@ class InboundWebSocketHandler:
                                 }
                                 try:
                                     await self.elevenlabs_ws.send(json.dumps(audio_message))
+                                except websockets.exceptions.ConnectionClosed:
+                                    logger.info("[InboundHandler] ElevenLabs connection closed while sending audio")
+                                    return
                                 except Exception as e:
                                     logger.error(f"[InboundHandler] Failed to send audio to ElevenLabs: {e}")
                     
@@ -241,6 +250,10 @@ class InboundWebSocketHandler:
                             }
                             try:
                                 await self.websocket.send_json(media_message)
+                            except (RuntimeError, WebSocketDisconnect):
+                                # "Cannot call 'send' once a close message has been sent."
+                                logger.info("[InboundHandler] Twilio connection closed while sending audio")
+                                return
                             except Exception as e:
                                 logger.error(f"[InboundHandler] Failed to send audio to Twilio: {e}")
                     
