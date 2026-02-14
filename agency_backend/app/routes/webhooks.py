@@ -916,24 +916,31 @@ async def _send_post_call_notifications(payload: CallCompletePayload, record: di
             if whatsapp_result is None:
                 whatsapp_result = {"success": False, "error": "No response from WhatsApp service"}
             if whatsapp_result.get("success"):
-                logger.info(f"[PostCallNotifications] WhatsApp (brochure + summary) sent to {whatsapp_number}")
-                prefs.whatsapp_sent = True
-                if whatsapp_number != (prefs.whatsapp_number or ""):
-                    prefs.whatsapp_number = whatsapp_number
-                # Record in conversation so it shows on Chats page
-                try:
-                    thread = await ConversationService.get_or_create_thread(whatsapp_number, "whatsapp")
-                    if thread.get("id"):
-                        await ConversationService.add_message(
-                            thread_id=thread["id"],
-                            body=summary_body_for_conversation,
-                            direction="outbound",
-                            sender_type="bot",
-                            twilio_message_sid=whatsapp_result.get("message_sid"),
-                        )
-                        await dashboard_manager.broadcast("conversation_message", {"thread_id": thread["id"], "channel": "whatsapp"})
-                except Exception as rec:
-                    logger.warning(f"[PostCallNotifications] Failed to record WhatsApp in conversation: {rec}")
+                # Only record if a message was actually sent (not skipped)
+                sent_body = whatsapp_result.get("message_body")
+                
+                if sent_body:
+                    logger.info(f"[PostCallNotifications] WhatsApp sent to {whatsapp_number}")
+                    prefs.whatsapp_sent = True
+                    if whatsapp_number != (prefs.whatsapp_number or ""):
+                        prefs.whatsapp_number = whatsapp_number
+                        
+                    # Record in conversation so it shows on Chats page
+                    try:
+                        thread = await ConversationService.get_or_create_thread(whatsapp_number, "whatsapp")
+                        if thread.get("id"):
+                            await ConversationService.add_message(
+                                thread_id=thread["id"],
+                                body=sent_body,  # Use the actual message body returned by the service
+                                direction="outbound",
+                                sender_type="bot",
+                                twilio_message_sid=whatsapp_result.get("message_sid"),
+                            )
+                            await dashboard_manager.broadcast("conversation_message", {"thread_id": thread["id"], "channel": "whatsapp"})
+                    except Exception as rec:
+                        logger.warning(f"[PostCallNotifications] Failed to record WhatsApp in conversation: {rec}")
+                else:
+                    logger.info(f"[PostCallNotifications] WhatsApp skipped (no message body), not recording in DB.")
             else:
                 logger.warning(f"[PostCallNotifications] WhatsApp failed: {whatsapp_result.get('error')}")
         except Exception as e:

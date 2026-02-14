@@ -100,20 +100,21 @@ We will contact you soon to resolve this.
                     client, message_params, to_number
                 )
                 
-            logger.info(f"[WhatsApp] Message sent successfully to {to_number}, sid: {message.sid}")
-            
-            # If follow-up date exists, send interactive message with buttons
-            if follow_up_date and call_id:
-                await cls._send_interactive_buttons(
-                    client, whatsapp_from, whatsapp_to, follow_up_date, call_id
-                )
+                logger.info(f"[WhatsApp] Message sent successfully to {to_number}, sid: {message.sid}")
+                
+                # If follow-up date exists, send interactive message with buttons
+                if follow_up_date and call_id:
+                    await cls._send_interactive_buttons(
+                        client, whatsapp_from, whatsapp_to, follow_up_date, call_id
+                    )
                 
                 return {
-                    "success": True,
-                    "message_sid": message.sid,
-                    "to": to_number,
-                    "status": message.status
-                }
+                            "success": True,
+                            "message_sid": message.sid,
+                            "to": to_number,
+                            "status": message.status,
+                            "message_body": message_body  # Return the actual message sent
+                        }
             else:
                 # If no ticket, do NOT send anything
                 logger.info(f"[WhatsApp] No ticket raised for {to_number}, skipping WhatsApp notification.")
@@ -121,7 +122,8 @@ We will contact you soon to resolve this.
                     "success": True,  # Return true to indicate no error occurred (just skipped)
                     "message_sid": None,
                     "to": to_number,
-                    "status": "skipped"
+                    "status": "skipped",
+                    "message_body": None
                 }
 
         except Exception as e:
@@ -129,7 +131,8 @@ We will contact you soon to resolve this.
             return {
                 "success": False,
                 "error": str(e),
-                "to": to_number
+                "to": to_number,
+                "message_body": None
             }
     
     @classmethod
