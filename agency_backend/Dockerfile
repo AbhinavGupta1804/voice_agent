@@ -1,9 +1,7 @@
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS base
+FROM python:3.13-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev gcc libc6-dev \
@@ -11,29 +9,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-ARG UID=10001
-RUN adduser \
-    --disabled-password \
-    --gecos "" \
-    --home "/nonexistent" \
-    --shell "/sbin/nologin" \
-    --no-create-home \
-    --uid "${UID}" \
-    appuser
+COPY requirements.txt ./
 
-RUN chown -R appuser:appuser /app
-
-COPY pyproject.toml uv.lock ./
-
-RUN uv venv
-
-ENV PATH="/app/.venv/bin:$PATH"
-
-RUN uv sync --locked
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-
-USER appuser
 
 EXPOSE 8080
 
