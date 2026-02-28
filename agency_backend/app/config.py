@@ -48,6 +48,20 @@ class Config:
     # Example: https://pub-0d05beffe4df48109a9b7182cfc00427.r2.dev
     R2_PUBLIC_BASE_URL = os.getenv("R2_PUBLIC_BASE_URL")
     
+    # Cal.com Appointment Booking Configuration
+    CAL_API_KEY = os.getenv("CAL_API_KEY")
+    CAL_API_VERSION = os.getenv("CAL_API_VERSION", "2024-09-04")
+    CAL_BOOK_API_VERSION = os.getenv("CAL_BOOK_API_VERSION", "2024-08-13")
+    CAL_EVENT_TYPE_ID = os.getenv("CAL_EVENT_TYPE_ID", "4881369")
+    
+    # Zoho Desk Configuration
+    ZOHO_CLIENT_ID = os.getenv("ZOHO_CLIENT_ID")
+    ZOHO_CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET")
+    ZOHO_REFRESH_TOKEN = os.getenv("ZOHO_REFRESH_TOKEN")
+    ZOHO_ORG_ID = os.getenv("ZOHO_ORG_ID")
+    ZOHO_DEPARTMENT_ID = os.getenv("ZOHO_DEPARTMENT_ID")
+    ZOHO_API_DOMAIN = os.getenv("ZOHO_API_DOMAIN", "https://desk.zoho.in")
+    
     # Server Configuration
     PORT = int(os.getenv("PORT", "8000"))
     NGROK_URL = os.getenv("NGROK_URL", "")

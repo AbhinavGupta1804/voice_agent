@@ -9,6 +9,7 @@ import websockets
 
 from ..services.elevenlabs_service import ElevenLabsService
 from ..services.call_record_service import CallRecordService
+from ..utils.active_calls import register_call, unregister_call
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,11 @@ class InboundWebSocketHandler:
         try:
             # Connect to ElevenLabs immediately using signed URL
             await self._setup_elevenlabs()
+            
+            # Send conversation init IMMEDIATELY — don't wait for Twilio start event.
+            # The inbound greeting is generic (no caller name needed), so we can
+            # trigger ElevenLabs TTS right away while Twilio is still handshaking.
+            await self._initialize_conversation_context()
             
             # Handle the connection with concurrent tasks
             await self._handle_connection()
@@ -102,8 +108,11 @@ class InboundWebSocketHandler:
             logger.error("[ElevenLabs] Failed to send conversation initiation payload: %s", exc)
 
     def _build_first_message(self) -> str:
-        """Create the agent's first message for inbound calls."""
-        return "Hey, मैं Priya बोल रही हूँ Naturals Ice Cream से. How can I help you today with our delicious handcrafted ice creams?"
+        """Create the agent's first message for inbound calls.
+        
+        Kept short to minimise TTS latency — every word adds ~50-100ms.
+        """
+        return "Hey! Priya bol rahi hoon, Naturals Ice Cream se. Bataiye, kaise help karun?"
 
     def _build_dynamic_variables(self) -> dict:
         """Assemble dynamic variables for the ElevenLabs conversation context."""
@@ -114,11 +123,11 @@ class InboundWebSocketHandler:
     
     async def _handle_connection(self):
         """Handle the WebSocket connection lifecycle."""
-        # Wait for Twilio start event to get call metadata
-        start_event_received = False
+        
+        # Shared event so both handlers know when to stop
+        stop_event = asyncio.Event()
         
         async def handle_twilio_messages():
-            nonlocal start_event_received
             try:
                 async for message in self.websocket.iter_text():
                     if not message:
@@ -128,12 +137,10 @@ class InboundWebSocketHandler:
                     event_type = data.get("event")
                     
                     if event_type == "start":
-                        start_event_received = True
                         start_data = data.get("start", {})
                         self.stream_sid = start_data.get("streamSid")
                         self.call_sid = start_data.get("callSid")
                         
-                        # Extract phone number from multiple possible fields
                         # Extract phone number from multiple possible fields
                         custom_params = start_data.get("customParameters", {})
                         self.caller_phone = (
@@ -151,15 +158,14 @@ class InboundWebSocketHandler:
                         
                         # Store call metadata for webhook lookup
                         if self.call_sid and self.caller_phone:
+                            register_call(self.caller_phone, self.call_sid)
                             await CallRecordService.store_call_metadata(
                                 call_sid=self.call_sid,
                                 client_name=client_name,
                                 phone_number=self.caller_phone,
                                 call_type="inbound"
                             )
-                        
-                        # Initialize conversation context after start event
-                        await self._initialize_conversation_context()
+                        # NOTE: conversation init already sent in handle() for speed
                     
                     elif event_type == "media":
                         # Forward audio to ElevenLabs
@@ -181,12 +187,15 @@ class InboundWebSocketHandler:
                     
                     elif event_type == "stop":
                         logger.info("[InboundHandler] Twilio stream stopped")
-                        break
+                        stop_event.set()  # Signal both handlers to stop
+                        return  # Exit handle_twilio_messages
             
             except WebSocketDisconnect:
                 logger.info("[InboundHandler] Twilio disconnected")
+                stop_event.set()
             except Exception as e:
                 logger.error(f"[InboundHandler] Error handling Twilio messages: {e}")
+                stop_event.set()
         
         async def handle_elevenlabs_messages():
             try:
@@ -194,7 +203,9 @@ class InboundWebSocketHandler:
                     return
                 
                 async for message in self.elevenlabs_ws:
-                    if self.elevenlabs_closed:
+                    # Stop reading if Twilio stopped
+                    if stop_event.is_set() or self.elevenlabs_closed:
+                        break
                         break
                     
                     data = json.loads(message)
@@ -271,26 +282,35 @@ class InboundWebSocketHandler:
                 logger.error(f"[InboundHandler] Error handling ElevenLabs messages: {e}")
                 self.elevenlabs_closed = True
         
-        # Wait for start event before starting ElevenLabs handler
-        timeout = 5.0
-        start_time = asyncio.get_event_loop().time()
-        
-        while not start_event_received and (asyncio.get_event_loop().time() - start_time) < timeout:
-            await asyncio.sleep(0.1)
-        
-        if not start_event_received:
-            logger.warning("[InboundHandler] Start event not received, proceeding anyway")
-        
-        # Run both handlers concurrently
-        await asyncio.gather(
-            handle_twilio_messages(),
-            handle_elevenlabs_messages(),
-            return_exceptions=True
-        )
+        # Run both handlers concurrently — no polling delay!
+        # Conversation init was already sent in handle() so ElevenLabs
+        # can start generating the greeting while Twilio finishes setup.
+        try:
+            await asyncio.gather(
+                handle_twilio_messages(),
+                handle_elevenlabs_messages(),
+                return_exceptions=True
+            )
+        finally:
+            # CRITICAL: Close ElevenLabs immediately when either handler stops/errors.
+            # This prevents the "call continues at ElevenLabs until timeout" issue.
+            if self.elevenlabs_ws and not self.elevenlabs_closed:
+                try:
+                    await asyncio.wait_for(self.elevenlabs_ws.close(), timeout=2.0)
+                    logger.info("[InboundHandler] ElevenLabs connection closed")
+                except asyncio.TimeoutError:
+                    logger.warning("[InboundHandler] ElevenLabs close timed out")
+                except Exception as e:
+                    logger.warning(f"[InboundHandler] Error closing ElevenLabs: {e}")
+                self.elevenlabs_closed = True
     
     async def _cleanup(self):
         """Cleanup resources."""
         try:
+            # Unregister from active calls
+            if self.caller_phone:
+                unregister_call(self.caller_phone)
+            
             if self.elevenlabs_ws and not self.elevenlabs_closed:
                 await self.elevenlabs_ws.close()
                 self.elevenlabs_closed = True

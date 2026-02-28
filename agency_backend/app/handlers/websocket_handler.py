@@ -8,6 +8,7 @@ import websockets
 
 from ..services.elevenlabs_service import ElevenLabsService
 from ..services.call_record_service import CallRecordService
+from ..utils.active_calls import register_call, unregister_call
 
 logger = logging.getLogger(__name__)
 
@@ -118,9 +119,8 @@ class OutboundWebSocketHandler:
         name = (self.client_name or "").strip()
         if not name:
             name = "there"
-        return (
-            f"Hey {name}, मैं Priya बोल रही हूँ Naturals Ice Cream से. How can I help you today with our delicious handcrafted ice creams?"
-        )
+        # Keep short to minimise TTS latency — every word adds ~50-100ms.
+        return f"Hey {name}! Priya bol rahi hoon, Naturals Ice Cream se. Bataiye, kaise help karun?"
 
     def _build_dynamic_variables(self) -> dict:
         """Assemble dynamic variables for the ElevenLabs conversation context."""
@@ -133,117 +133,144 @@ class OutboundWebSocketHandler:
 
     async def _handle_connection(self):
         """Handle the WebSocket connection lifecycle."""
-        # Start bidirectional communication
-        await asyncio.gather(
-            self._handle_elevenlabs_messages(),
-            self._handle_twilio_messages()
-        )
-    
-    async def _handle_elevenlabs_messages(self):
-        """Handle messages from ElevenLabs and forward to Twilio."""
-        try:
-            async for message in self.elevenlabs_ws:
-                try:
-                    data = json.loads(message)
-                    msg_type = data.get("type")
-                    
-                    # Handle ping/pong
-                    if msg_type == "ping":
-                        event_id = data.get("ping_event", {}).get("event_id")
-                        if event_id:
-                            pong_response = {
-                                "type": "pong",
-                                "event_id": event_id
-                            }
-                            await self.elevenlabs_ws.send(json.dumps(pong_response))
-                            continue
-                    
-                    await self._process_elevenlabs_message(data)
-                
-                except json.JSONDecodeError as e:
-                    logger.error(f"[ElevenLabs] JSON decode error: {e}")
-                except Exception as e:
-                    logger.error(f"[ElevenLabs] Error processing message: {e}")
+        # Shared event so both handlers know when to stop
+        stop_event = asyncio.Event()
         
-        except websockets.exceptions.ConnectionClosed as e:
-            self.elevenlabs_closed = True  # Mark ElevenLabs as closed
-            
-            # Give Twilio time to flush audio
-            await asyncio.sleep(1)
+        async def handle_elevenlabs_with_stop():
+            """Wrapped handler that respects stop event."""
             try:
-                # Only try to send if websocket is still connected
-                if self.websocket.client_state.name == "CONNECTED":
-                    await self.websocket.send_text(json.dumps({"event": "stop"}))
-                    await self.websocket.close()
-            except Exception:
-                pass
-        
-        except Exception as e:
-            logger.error(f"[ElevenLabs] Error: {e}")
-    
-    async def _handle_twilio_messages(self):
-        """Handle messages from Twilio and forward to ElevenLabs."""
-        try:
-            while True:
-                # Check if ElevenLabs connection is closed
-                if self.elevenlabs_closed:
-                    break
-                
-                message = await self.websocket.receive_text()
-                data = json.loads(message)
-                
-                event = data.get("event")
-                
-                if event == "start":
-                    self.stream_sid = data["start"]["streamSid"]
-                    self.call_sid = data["start"]["callSid"]
+                async for message in self.elevenlabs_ws:
+                    # Exit early if Twilio stopped
+                    if stop_event.is_set() or self.elevenlabs_closed:
+                        break
                     
-                    # Extract custom parameters from Twilio Stream
-                    custom_params = data["start"].get("customParameters", {})
-                    if custom_params:
-                        self.client_name = custom_params.get("client_name", "")
-                        self.phone_number = custom_params.get("phone_number", "")
-                        self.follow_up_first_message = custom_params.get("follow_up_first_message", "")
-                        logger.info(f"[Handler] Extracted from Stream params - Client: {self.client_name}, Phone: {self.phone_number}, has_follow_up_first_message={bool(self.follow_up_first_message)}")
+                    try:
+                        data = json.loads(message)
+                        msg_type = data.get("type")
                         
-                        # Now that we have all the info, re-initialize ElevenLabs with correct context
-                        if self.elevenlabs_ws:
-                            await self._initialize_conversation_context()
+                        # Handle ping/pong
+                        if msg_type == "ping":
+                            event_id = data.get("ping_event", {}).get("event_id")
+                            if event_id:
+                                pong_response = {
+                                    "type": "pong",
+                                    "event_id": event_id
+                                }
+                                await self.elevenlabs_ws.send(json.dumps(pong_response))
+                                continue
+                        
+                        await self._process_elevenlabs_message(data)
+                    
+                    except json.JSONDecodeError as e:
+                        logger.error(f"[ElevenLabs] JSON decode error: {e}")
+                    except Exception as e:
+                        logger.error(f"[ElevenLabs] Error processing message: {e}")
+            
+            except websockets.exceptions.ConnectionClosed as e:
+                self.elevenlabs_closed = True  # Mark ElevenLabs as closed
+                stop_event.set()  # Signal Twilio handler to stop
                 
-                elif event == "media":
-                    # Only forward audio if ElevenLabs is still connected
-                    if self.elevenlabs_ws and not self.elevenlabs_closed:
-                        try:
-                            # Forward audio to ElevenLabs
-                            audio_payload = data["media"]["payload"]
-                            audio_message = {
-                                "user_audio_chunk": audio_payload
-                            }
-                            await self.elevenlabs_ws.send(json.dumps(audio_message))
-                        except websockets.exceptions.ConnectionClosed:
-                            # ElevenLabs closed, mark it and stop forwarding
-                            self.elevenlabs_closed = True
-                            break
-                        except Exception as e:
-                            logger.error(f"[ElevenLabs] Failed to send audio: {e}")
-                            # Don't continue if there's a persistent error
-                            if "received 1000" in str(e) or "then sent 1000" in str(e):
-                                self.elevenlabs_closed = True
-                                break
-                
-                elif event == "stop":
-                    if self.elevenlabs_ws and not self.elevenlabs_closed:
-                        try:
-                            await self.elevenlabs_ws.close()
-                            self.elevenlabs_closed = True
-                        except:
-                            pass
-                    break
+                # Give Twilio time to flush audio
+                await asyncio.sleep(1)
+                try:
+                    # Only try to send if websocket is still connected
+                    if self.websocket.client_state.name == "CONNECTED":
+                        await self.websocket.send_text(json.dumps({"event": "stop"}))
+                        await self.websocket.close()
+                except Exception:
+                    pass
+            
+            except Exception as e:
+                logger.error(f"[ElevenLabs] Error: {e}")
+                stop_event.set()
         
-        except WebSocketDisconnect:
-            pass
-        except Exception as e:
-            logger.error(f"[Twilio] Error: {e}")
+        async def handle_twilio_with_stop():
+            """Wrapped handler that respects stop event."""
+            try:
+                while True:
+                    # Check if ElevenLabs connection is closed or stop was signaled
+                    if self.elevenlabs_closed or stop_event.is_set():
+                        break
+                    
+                    message = await self.websocket.receive_text()
+                    data = json.loads(message)
+                    
+                    event = data.get("event")
+                    
+                    if event == "start":
+                        self.stream_sid = data["start"]["streamSid"]
+                        self.call_sid = data["start"]["callSid"]
+                        
+                        # Register active call for end_call tool
+                        if self.call_sid and self.phone_number:
+                            register_call(self.phone_number, self.call_sid)
+                        
+                        # Extract custom parameters from Twilio Stream
+                        custom_params = data["start"].get("customParameters", {})
+                        if custom_params:
+                            self.client_name = custom_params.get("client_name", "")
+                            self.phone_number = custom_params.get("phone_number", "")
+                            self.follow_up_first_message = custom_params.get("follow_up_first_message", "")
+                            logger.info(f"[Handler] Extracted from Stream params - Client: {self.client_name}, Phone: {self.phone_number}, has_follow_up_first_message={bool(self.follow_up_first_message)}")
+                            
+                            # Now that we have all the info, re-initialize ElevenLabs with correct context
+                            if self.elevenlabs_ws:
+                                await self._initialize_conversation_context()
+                    
+                    elif event == "media":
+                        # Only forward audio if ElevenLabs is still connected
+                        if self.elevenlabs_ws and not self.elevenlabs_closed:
+                            try:
+                                # Forward audio to ElevenLabs
+                                audio_payload = data["media"]["payload"]
+                                audio_message = {
+                                    "user_audio_chunk": audio_payload
+                                }
+                                await self.elevenlabs_ws.send(json.dumps(audio_message))
+                            except websockets.exceptions.ConnectionClosed:
+                                # ElevenLabs closed, mark it and stop forwarding
+                                self.elevenlabs_closed = True
+                                stop_event.set()
+                                break
+                            except Exception as e:
+                                logger.error(f"[ElevenLabs] Failed to send audio: {e}")
+                                # Don't continue if there's a persistent error
+                                if "received 1000" in str(e) or "then sent 1000" in str(e):
+                                    self.elevenlabs_closed = True
+                                    stop_event.set()
+                                    break
+                    
+                    elif event == "stop":
+                        logger.info("[Handler] Twilio stream stopped")
+                        stop_event.set()  # Signal ElevenLabs handler to stop
+                        break
+            
+            except WebSocketDisconnect:
+                logger.info("[Handler] Twilio disconnected")
+                stop_event.set()
+            except Exception as e:
+                logger.error(f"[Twilio] Error: {e}")
+                stop_event.set()
+        
+        # Start bidirectional communication
+        try:
+            await asyncio.gather(
+                handle_elevenlabs_with_stop(),
+                handle_twilio_with_stop(),
+                return_exceptions=True
+            )
+        finally:
+            # CRITICAL: Close ElevenLabs immediately when either handler stops/errors.
+            # This prevents the "call continues at ElevenLabs until timeout" issue.
+            if self.elevenlabs_ws and not self.elevenlabs_closed:
+                try:
+                    await asyncio.wait_for(self.elevenlabs_ws.close(), timeout=2.0)
+                    logger.info("[Handler] ElevenLabs connection closed")
+                except asyncio.TimeoutError:
+                    logger.warning("[Handler] ElevenLabs close timed out")
+                except Exception as e:
+                    logger.warning(f"[Handler] Error closing ElevenLabs: {e}")
+                self.elevenlabs_closed = True
     
     async def _process_elevenlabs_message(self, message: dict):
         """
@@ -305,6 +332,10 @@ class OutboundWebSocketHandler:
     
     async def _cleanup(self):
         """Cleanup resources."""
+        # Unregister from active calls
+        if self.phone_number:
+            unregister_call(self.phone_number)
+        
         if self.elevenlabs_ws and not self.elevenlabs_closed:
             try:
                 await self.elevenlabs_ws.close()

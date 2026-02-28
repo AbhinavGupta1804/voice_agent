@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from .config import Config
 from .db import init_postgres, close_postgres
 from .services.scheduler_service import start_scheduler, stop_scheduler
+from .services.elevenlabs_service import ElevenLabsService
 from .routes import (
     register_outbound_routes,
     register_webhook_routes,
@@ -31,7 +32,7 @@ from .routes.tickets import router as tickets_router
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Changed to DEBUG for troubleshooting
+    level=logging.INFO,  # INFO level for cleaner logs
     format='[%(asctime)s] %(levelname)s - %(name)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
@@ -44,6 +45,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("websockets").setLevel(logging.INFO)
 logging.getLogger("handlers.websocket_handler").setLevel(logging.INFO)
+logging.getLogger("groq").setLevel(logging.WARNING)  # Silence Groq SDK debug logs
+logging.getLogger("groq._base_client").setLevel(logging.WARNING)
 
 
 @asynccontextmanager
@@ -65,6 +68,13 @@ async def lifespan(app: FastAPI):
         logger.info("[Server] Follow-up scheduler started successfully")
     except Exception as e:
         logger.error(f"[Server] Scheduler initialization failed: {e}", exc_info=True)
+    
+    # Pre-fetch ElevenLabs signed URL so the first call is instant
+    try:
+        await ElevenLabsService.warmup()
+        logger.info("[Server] ElevenLabs signed URL pre-fetched")
+    except Exception as e:
+        logger.warning(f"[Server] ElevenLabs warmup failed (will fetch on first call): {e}")
     
     try:
         yield

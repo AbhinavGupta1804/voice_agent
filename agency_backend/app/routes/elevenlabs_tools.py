@@ -1,6 +1,6 @@
 """ElevenLabs Custom Tools API endpoints."""
 import logging
-from typing import Optional
+from typing import Optional, List, Dict
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -175,5 +175,38 @@ def register_elevenlabs_tools_routes(app):
         except Exception as e:
             logger.error(f"[ElevenLabs Tool] Check ticket status error: {e}", exc_info=True)
             return TicketToolResponse(success=False, message="System error. Could not check ticket status.")
+
+    # ── Custom Tool Engine: Chat Endpoint ──────────────────
+
+    class ChatRequest(BaseModel):
+        """Request model for custom tool engine chat."""
+        message: str = Field(..., description="User's message")
+        conversation_history: Optional[List[Dict[str, str]]] = Field(
+            None, description="Prior messages [{role, content}]")
+
+    @router.post("/chat")
+    async def chat_with_tools(request: ChatRequest):
+        """
+        Chat endpoint using custom tool engine.
+        LLM decides whether to call create_ticket or just reply.
+
+        POST /api/elevenlabs/chat
+        Body: {"message": "Mera order galat aaya", "conversation_history": [...]}
+        Returns: {"response": "...", "tool_used": "create_ticket"|null, "tool_result": {...}|null}
+        """
+        from ..tools.create_ticket import process_message
+
+        try:
+            logger.info(f"[Chat Tool Engine] Message: {request.message[:100]}")
+            result = await process_message(
+                user_message=request.message,
+                conversation_history=request.conversation_history,
+            )
+            logger.info(f"[Chat Tool Engine] Tool used: {result.get('tool_used')}")
+            return result
+
+        except Exception as e:
+            logger.error(f"[Chat Tool Engine] Error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
 
     app.include_router(router)

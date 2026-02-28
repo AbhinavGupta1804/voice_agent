@@ -62,18 +62,39 @@ def build_vectorstore(documents: List[Document]) -> FAISS:
     return vectorstore
 
 
-def get_retriever(k: int = 5):
-    """Get a simple retriever from the vectorstore."""
-    embeddings = OpenAIEmbeddings(
-        api_key=Config.OPENAI_API_KEY,
-        model="text-embedding-3-small"
-    )
-    
-    vectorstore = FAISS.load_local(
-        str(VECTORSTORE_PATH),
-        embeddings,
-        allow_dangerous_deserialization=True
-    )
+# ── In-memory cache ──
+_cached_embeddings = None
+_cached_vectorstore = None
+
+
+def _get_embeddings():
+    """Get or create cached embeddings instance."""
+    global _cached_embeddings
+    if _cached_embeddings is None:
+        _cached_embeddings = OpenAIEmbeddings(
+            api_key=Config.OPENAI_API_KEY,
+            model="text-embedding-3-small"
+        )
+        logger.info("[RAG] Embeddings initialized (cached)")
+    return _cached_embeddings
+
+
+def _get_vectorstore():
+    """Get or create cached vectorstore instance."""
+    global _cached_vectorstore
+    if _cached_vectorstore is None:
+        _cached_vectorstore = FAISS.load_local(
+            str(VECTORSTORE_PATH),
+            _get_embeddings(),
+            allow_dangerous_deserialization=True
+        )
+        logger.info("[RAG] Vectorstore loaded into memory (cached)")
+    return _cached_vectorstore
+
+
+def get_retriever(k: int = 3):
+    """Get a retriever from the cached vectorstore."""
+    vectorstore = _get_vectorstore()
     return vectorstore.as_retriever(search_kwargs={"k": k})
 
 
