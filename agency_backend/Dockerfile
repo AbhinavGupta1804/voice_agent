@@ -25,8 +25,7 @@ RUN uv venv
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked
+RUN uv sync --locked
 
 COPY . .
 
