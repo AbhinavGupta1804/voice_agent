@@ -50,8 +50,8 @@ class InboundWebSocketHandler:
             await self._handle_connection()
         
         except Exception as e:
-            logger.error(f"[InboundHandler] Error in inbound media stream: {e}")
-        
+            logger.error(f"[InboundHandler] Error in inbound media stream: {e}", exc_info=True)
+
         finally:
             await self._cleanup()
     
@@ -112,7 +112,7 @@ class InboundWebSocketHandler:
         
         Kept short to minimise TTS latency — every word adds ~50-100ms.
         """
-        return "Hey! Priya bol rahi hoon, Naturals Ice Cream se. Bataiye, kaise help karun?"
+        return "Hey! Neha bol rahi hoon, Naturals Ice Cream se. Bataiye, kaise help karun?"
 
     def _build_dynamic_variables(self) -> dict:
         """Assemble dynamic variables for the ElevenLabs conversation context."""
@@ -190,8 +190,11 @@ class InboundWebSocketHandler:
                         stop_event.set()  # Signal both handlers to stop
                         return  # Exit handle_twilio_messages
             
-            except WebSocketDisconnect:
-                logger.info("[InboundHandler] Twilio disconnected")
+            except WebSocketDisconnect as e:
+                logger.info(
+                    "[InboundHandler] Twilio disconnected (code=%s). Call may have been hung up or network/ngrok dropped.",
+                    getattr(e, "code", "?"),
+                )
                 stop_event.set()
             except Exception as e:
                 logger.error(f"[InboundHandler] Error handling Twilio messages: {e}")
@@ -206,8 +209,7 @@ class InboundWebSocketHandler:
                     # Stop reading if Twilio stopped
                     if stop_event.is_set() or self.elevenlabs_closed:
                         break
-                        break
-                    
+
                     data = json.loads(message)
                     msg_type = data.get("type")
                     
@@ -276,8 +278,14 @@ class InboundWebSocketHandler:
                             }
                             await self.websocket.send_text(json.dumps(clear_message))
             
-            except websockets.exceptions.ConnectionClosed:
+            except websockets.exceptions.ConnectionClosed as e:
                 self.elevenlabs_closed = True
+                logger.warning(
+                    "[InboundHandler] ElevenLabs WebSocket closed (code=%s, reason=%s). "
+                    "If this happens right after conversation_initiation_metadata, check ElevenLabs agent config or signed URL.",
+                    getattr(e, "code", "?"),
+                    getattr(e, "reason", str(e))[:200],
+                )
             except Exception as e:
                 logger.error(f"[InboundHandler] Error handling ElevenLabs messages: {e}")
                 self.elevenlabs_closed = True
@@ -286,11 +294,14 @@ class InboundWebSocketHandler:
         # Conversation init was already sent in handle() so ElevenLabs
         # can start generating the greeting while Twilio finishes setup.
         try:
-            await asyncio.gather(
+            results = await asyncio.gather(
                 handle_twilio_messages(),
                 handle_elevenlabs_messages(),
-                return_exceptions=True
+                return_exceptions=True,
             )
+            for i, r in enumerate(results):
+                if isinstance(r, Exception):
+                    logger.warning("[InboundHandler] Handler task %s exited with: %s", i, r)
         finally:
             # CRITICAL: Close ElevenLabs immediately when either handler stops/errors.
             # This prevents the "call continues at ElevenLabs until timeout" issue.
@@ -310,15 +321,16 @@ class InboundWebSocketHandler:
             # Unregister from active calls
             if self.caller_phone:
                 unregister_call(self.caller_phone)
-            
+
             if self.elevenlabs_ws and not self.elevenlabs_closed:
                 await self.elevenlabs_ws.close()
                 self.elevenlabs_closed = True
-            
+
             if self.websocket:
                 try:
                     await self.websocket.close()
-                except:
+                    logger.info("[InboundHandler] Closed Twilio WebSocket (cleanup)")
+                except Exception:
                     pass
         except Exception as e:
             logger.error(f"[InboundHandler] Error during cleanup: {e}")

@@ -141,14 +141,16 @@ class ZohoDeskService:
                 
                 if response.status_code in (200, 201):
                     data = response.json()
-                    ticket_id = data.get("id")
+                    # Website ticket_id ≠ CRM ticket id — different numbering.
+                    # id = Zoho's long internal ID (for API). ticketNumber = short display # in CRM.
+                    zoho_long_id = data.get("id")
                     ticket_number = data.get("ticketNumber")
                     
-                    logger.info(f"[ZohoDesk] Ticket #{ticket_number} created successfully (ID: {ticket_id})")
+                    logger.info(f"[ZohoDesk] Ticket #{ticket_number} created successfully (ID: {zoho_long_id})")
                     
                     return {
                         "success": True,
-                        "ticket_id": ticket_id,
+                        "ticket_id": zoho_long_id,  # long id for DB zoho_ticket_id column; NOT ticketNumber
                         "ticket_number": ticket_number,
                         "message": f"Ticket #{ticket_number} create ho gaya hai {customer_name} ji ke liye. Humari team jaldi contact karegi.",
                     }
@@ -190,3 +192,35 @@ class ZohoDeskService:
         except Exception as e:
             logger.error(f"[ZohoDesk] Exception getting ticket: {e}", exc_info=True)
             return None
+
+    @classmethod
+    async def update_ticket_description(cls, zoho_ticket_id: str, new_description: str) -> Dict[str, Any]:
+        """
+        Update an existing ticket's description in Zoho Desk (e.g. after appending another complaint).
+        zoho_ticket_id must be CRM (Zoho) long internal ID (from support_tickets.zoho_ticket_id). Website ticket_id uses different numbering.
+        Uses PATCH so only the description field is updated.
+        """
+        try:
+            access_token = await cls._get_access_token()
+            async with httpx.AsyncClient() as client:
+                response = await client.patch(
+                    f"{Config.ZOHO_API_DOMAIN}/api/v1/tickets/{zoho_ticket_id}",
+                    headers={
+                        "Authorization": f"Zoho-oauthtoken {access_token}",
+                        "orgId": Config.ZOHO_ORG_ID,
+                        "Content-Type": "application/json",
+                    },
+                    json={"description": new_description},
+                )
+                if response.status_code == 200:
+                    logger.info(
+                        "[ZohoDesk] update_ticket_description: ticket %s updated, new_desc_len=%d",
+                        str(zoho_ticket_id)[:16] + "...",
+                        len(new_description),
+                    )
+                    return {"success": True, "message": "Ticket description updated."}
+                logger.error(f"[ZohoDesk] Failed to update ticket: {response.status_code} - {response.text}")
+                return {"success": False, "message": response.text}
+        except Exception as e:
+            logger.error(f"[ZohoDesk] Exception updating ticket: {e}", exc_info=True)
+            return {"success": False, "message": str(e)}
