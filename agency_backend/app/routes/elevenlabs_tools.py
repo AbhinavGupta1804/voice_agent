@@ -4,12 +4,13 @@ from typing import Optional, List, Dict
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel, Field
 
 from ..config import Config
 from ..services.rag import get_retriever
 from ..services.ticket_service import TicketService
+from ..services.call_record_service import CallRecordService
 from ..models.ticket_models import TicketCreate
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class CreateTicketRequest(BaseModel):
     customer_name: str = Field(..., description="Name of the customer reporting the issue")
     issue_description: str = Field(..., description="Details of the issue or complaint")
     phone_number: Optional[str] = Field(None, description="Phone number associated with the ticket")
+    conversation_id: Optional[str] = Field(None, description="ElevenLabs conversation ID; used to resolve phone if phone_number is empty")
     priority: str = Field("Medium", description="Priority level: High, Medium, or Low")
 
 class TicketToolResponse(BaseModel):
@@ -158,17 +160,29 @@ def register_elevenlabs_tools_routes(app):
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/create_ticket", response_model=TicketToolResponse)
-    async def create_ticket_tool(request: CreateTicketRequest):
+    async def create_ticket_tool(
+        request: CreateTicketRequest,
+        x_conversation_id: Optional[str] = Header(None, alias="X-Conversation-Id"),
+    ):
         """
         ElevenLabs Custom Tool: Create a new complain ticket.
+        If phone_number is empty, resolves it from conversation_id (body or X-Conversation-Id header).
         """
         try:
-            logger.info(f"[ElevenLabs Tool] Creating ticket for {request.customer_name}: {request.issue_description}")
+            conversation_id = request.conversation_id or x_conversation_id
+            phone_number = request.phone_number or ""
+            if not phone_number.strip() and conversation_id:
+                resolved = await CallRecordService.get_phone_number_from_conversation(request.conversation_id)
+                if resolved:
+                    phone_number = resolved
+                    logger.info("[ElevenLabs Tool] create_ticket: resolved phone_number from conversation_id=%s", conversation_id)
+            
+            logger.info(f"[ElevenLabs Tool] Creating ticket for {request.customer_name}: {request.issue_description}, phone=%s", phone_number or "(none)")
             
             ticket_data = TicketCreate(
                 customer_name=request.customer_name,
                 issue_description=request.issue_description,
-                phone_number=request.phone_number,
+                phone_number=phone_number or None,
                 priority=request.priority
             )
             
@@ -364,17 +378,21 @@ def register_elevenlabs_tools_routes(app):
                 request.start_time, utc_iso, request.name,
             )
 
+            # Cal.com v2 requires attendee.timeZone as valid IANA (e.g. Asia/Kolkata). We use IST for Indian customers.
+            attendee: dict = {
+                "name": request.name,
+                "email": request.email or "guest@naturalsicecream.in",
+                "timeZone": "Asia/Kolkata",
+            }
+            if request.phone_number:
+                attendee["phoneNumber"] = request.phone_number
+
             payload = {
                 "start": utc_iso,
                 "eventTypeId": int(Config.CAL_EVENT_TYPE_ID),
-                "attendee": {
-                    "name": request.name,
-                    "email": request.email,
-                },
+                "attendee": attendee,
                 "metadata": {},
             }
-            if request.phone_number:
-                payload["attendee"]["phoneNumber"] = request.phone_number
 
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(

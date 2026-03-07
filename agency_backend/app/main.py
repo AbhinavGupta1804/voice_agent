@@ -6,7 +6,7 @@ import logging
 import uvicorn
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 
@@ -114,7 +114,53 @@ async def root():
         "service": "DevFuzzion ElevenLabs-Twilio Integration"
     })
 
+@app.post("/elevenlabs-init")
+@app.get("/elevenlabs-init")
+async def elevenlabs_init(request: Request):
+    """
+    ElevenLabs conversation initiation webhook: return dynamic_variables (e.g. phone_number).
+    Configure this URL in ElevenLabs agent as 'Conversation initiation URL' or dynamic variables source.
+    Accepts POST (JSON body) or GET (query params). Tries multiple keys for caller phone.
+    """
+    data = {}
+    if request.method == "POST":
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+    else:
+        data = dict(request.query_params())
 
+    # Try common keys ElevenLabs / telephony might send (inbound call)
+    phone_number = (
+        data.get("phone_number")
+        or data.get("caller_id")
+        or data.get("from")
+        or data.get("caller")
+        or data.get("callerPhoneNumber")
+        or data.get("To")
+        or ""
+    )
+    if isinstance(phone_number, str):
+        phone_number = phone_number.strip()
+    else:
+        phone_number = str(phone_number or "")
+
+    logger.info(
+        "[ElevenLabs Init] method=%s, phone_number=%s, payload_keys=%s",
+        request.method,
+        phone_number or "(empty)",
+        list(data.keys()),
+    )
+
+    # Always return phone_number so tools don't fail with "Missing required dynamic variables"
+    return {
+        "type": "conversation_initiation_client_data",
+        "dynamic_variables": {
+            "phone_number": phone_number or ""
+        }
+    }
+    
 @app.get("/static/brochure.pdf")
 async def get_brochure():
     """Serve the brochure PDF file for WhatsApp media messages."""

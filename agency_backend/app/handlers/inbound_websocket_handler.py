@@ -41,11 +41,9 @@ class InboundWebSocketHandler:
             # Connect to ElevenLabs immediately using signed URL
             await self._setup_elevenlabs()
             
-            # Send conversation init IMMEDIATELY — don't wait for Twilio start event.
-            # The inbound greeting is generic (no caller name needed), so we can
-            # trigger ElevenLabs TTS right away while Twilio is still handshaking.
-            await self._initialize_conversation_context()
-            
+            # Do NOT send init here — we need caller_phone from Twilio "start" first.
+            # Init is sent in handle_twilio_messages() when we get "start", so
+            # dynamic_variables.phone_number is set and tools (create_ticket) don't fail.
             # Handle the connection with concurrent tasks
             await self._handle_connection()
         
@@ -98,12 +96,17 @@ class InboundWebSocketHandler:
             init_payload["conversation_config_override"] = {}
 
         dynamic_variables = self._build_dynamic_variables()
-        if dynamic_variables:
-            init_payload["dynamic_variables"] = dynamic_variables
+        # Always set phone_number so tools (create_ticket) don't get "Missing required dynamic variables"
+        if "phone_number" not in dynamic_variables:
+            dynamic_variables["phone_number"] = self.caller_phone or ""
+        init_payload["dynamic_variables"] = dynamic_variables
 
         try:
             await self.elevenlabs_ws.send(json.dumps(init_payload))
-            logger.info("[ElevenLabs] Sent inbound first message override")
+            logger.info(
+                "[ElevenLabs] Sent conversation init with dynamic_variables.phone_number=%s",
+                self.caller_phone or "(empty)",
+            )
         except Exception as exc:
             logger.error("[ElevenLabs] Failed to send conversation initiation payload: %s", exc)
 
@@ -165,7 +168,9 @@ class InboundWebSocketHandler:
                                 phone_number=self.caller_phone,
                                 call_type="inbound"
                             )
-                        # NOTE: conversation init already sent in handle() for speed
+                        # Send conversation init NOW (first and only time) so dynamic_variables.phone_number is set.
+                        # ElevenLabs requires this before tools run; we have caller_phone from "start".
+                        await self._initialize_conversation_context()
                     
                     elif event_type == "media":
                         # Forward audio to ElevenLabs
@@ -236,12 +241,23 @@ class InboundWebSocketHandler:
                         if self.conversation_id:
                             logger.info(f"[ElevenLabs] Conversation ID: {self.conversation_id}")
                             
-                            # Link conversation_id to call_sid for webhook lookup
+                            # Link conversation_id to call_sid for webhook lookup and tool fallback
                             if self.call_sid:
                                 await CallRecordService.link_conversation_to_call(
                                     conversation_id=self.conversation_id,
                                     call_sid=self.call_sid
                                 )
+                            # Push conversation_id so tools (e.g. create_ticket) can send it and we resolve phone
+                            if self.elevenlabs_ws and not self.elevenlabs_closed:
+                                try:
+                                    update = {
+                                        "type": "conversation_initiation_client_data",
+                                        "dynamic_variables": {"conversation_id": self.conversation_id},
+                                    }
+                                    await self.elevenlabs_ws.send(json.dumps(update))
+                                    logger.info("[InboundHandler] Sent dynamic_variables.conversation_id=%s", self.conversation_id)
+                                except Exception as e:
+                                    logger.warning("[InboundHandler] Failed to send conversation_id to ElevenLabs: %s", e)
                     
                     elif msg_type == "audio":
                         # Forward audio from ElevenLabs to Twilio
