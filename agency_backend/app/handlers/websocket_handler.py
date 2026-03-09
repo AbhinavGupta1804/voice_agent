@@ -120,7 +120,7 @@ class OutboundWebSocketHandler:
         if not name:
             name = "there"
         # Keep short to minimise TTS latency — every word adds ~50-100ms.
-        return f"Hey {name}! Neha bol rahi hoon, Naturals Ice Cream se. Bataiye, kaise help karun?"
+        return f"Hey {name}! This is Neha from Naturals Ice Cream. How can I help you?"
 
     def _build_dynamic_variables(self) -> dict:
         """Assemble dynamic variables for the ElevenLabs conversation context."""

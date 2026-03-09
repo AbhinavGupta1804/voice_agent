@@ -71,6 +71,7 @@ class BookSlotRequest(BaseModel):
     name: str = Field(..., description="Customer name for the booking")
     email: str = Field("guest@naturalsicecream.in", description="Customer email (optional)")
     phone_number: Optional[str] = Field(None, description="Customer phone number")
+    timezone: Optional[str] = Field("Asia/Kolkata", description="IANA timezone for the attendee (e.g. Asia/Kolkata). Defaults to Asia/Kolkata for Indian customers.", alias="timeZone")
 
 
 class BookSlotResponse(BaseModel):
@@ -378,11 +379,15 @@ def register_elevenlabs_tools_routes(app):
                 request.start_time, utc_iso, request.name,
             )
 
-            # Cal.com v2 requires attendee.timeZone as valid IANA (e.g. Asia/Kolkata). We use IST for Indian customers.
+            # Cal.com v2 requires attendee.timeZone (camelCase only) as valid IANA (e.g. Asia/Kolkata). Normalize value.
+            raw_tz = (request.timezone or "Asia/Kolkata").strip()
+            # Normalize common mistake: Asia/kolkata -> Asia/Kolkata (IANA is case-sensitive)
+            if raw_tz.lower() == "asia/kolkata":
+                raw_tz = "Asia/Kolkata"
             attendee: dict = {
                 "name": request.name,
                 "email": request.email or "guest@naturalsicecream.in",
-                "timeZone": "Asia/Kolkata",
+                "timeZone": raw_tz,
             }
             if request.phone_number:
                 attendee["phoneNumber"] = request.phone_number
