@@ -27,9 +27,11 @@ class OpenAIService:
         """
         Detect if a call is inbound or outbound based on the agent's first message in the transcript.
         
-        Logic:
-        - Inbound calls: Agent greets with "Hey Sir" (doesn't know user's name)
-        - Outbound calls: Agent greets with "Hey {name}" (knows user's name)
+        Logic (Hindi first messages):
+        - Inbound: "Namaste! Main Neha..." (no name after Namaste)
+        - Outbound: "Namaste {name}! Main Neha..." (name after Namaste)
+        
+        Fallback for legacy English: "Hey Sir" = inbound, "Hey {name}" = outbound.
         
         Args:
             transcript: The call transcript text
@@ -40,24 +42,34 @@ class OpenAIService:
         if not transcript:
             return None
         
-        # Look for the first agent message in the transcript
-        # Transcript format is typically: "Agent: Hey {name}!..." or "Agent: Hey Sir!..."
         lines = transcript.split('\n')
         for line in lines:
             line_lower = line.lower().strip()
-            # Check for agent messages (could be "Agent:", "agent:", etc.)
             if line_lower.startswith('agent:'):
                 message = line[len('agent:'):].strip()
                 message_lower = message.lower()
-                
-                # Check for inbound pattern: "Hey Sir" or variations
+
+                # Hindi: "Namaste! Main Neha..." = inbound (no name)
+                if message_lower.startswith('namaste!'):
+                    logger.info("[OpenAI] Detected call_type='inbound' from transcript (agent said 'Namaste!')")
+                    return "inbound"
+                # Hindi: "Namaste {name}! Main Neha..." = outbound
+                if message_lower.startswith('namaste '):
+                    words = message_lower.split()
+                    if len(words) > 1:
+                        second_word = words[1].strip(',!?')
+                        if second_word and second_word != 'ji':
+                            logger.info(f"[OpenAI] Detected call_type='outbound' from transcript (agent said 'Namaste {second_word}')")
+                            return "outbound"
+                    logger.info("[OpenAI] Detected call_type='inbound' from transcript (Namaste with no name)")
+                    return "inbound"
+
+                # Legacy English: "Hey Sir" = inbound
                 if message_lower.startswith('hey sir') or message_lower.startswith('hey, sir'):
                     logger.info("[OpenAI] Detected call_type='inbound' from transcript (agent said 'Hey Sir')")
                     return "inbound"
-                
-                # Check for outbound pattern: "Hey {name}" where name is not "Sir"
+                # Legacy English: "Hey {name}" = outbound
                 if message_lower.startswith('hey '):
-                    # Extract the word after "Hey"
                     words = message_lower.split()
                     if len(words) > 1:
                         second_word = words[1].strip(',!?')

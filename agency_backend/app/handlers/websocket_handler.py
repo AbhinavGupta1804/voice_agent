@@ -118,9 +118,10 @@ class OutboundWebSocketHandler:
             return self.follow_up_first_message.strip()
         name = (self.client_name or "").strip()
         if not name:
-            name = "there"
+            # Keep short to minimise TTS latency — every word adds ~50-100ms.
+            return "Namaste! Main Neha bol rahi hoon, Naturals Ice Cream se. Aapki kaise madad kar sakti hoon?"
         # Keep short to minimise TTS latency — every word adds ~50-100ms.
-        return f"Hey {name}! This is Neha from Naturals Ice Cream. How can I help you?"
+        return f"Namaste {name}! Main Neha bol rahi hoon, Naturals Ice Cream se. Aapki kaise madad kar sakti hoon?"
 
     def _build_dynamic_variables(self) -> dict:
         """Assemble dynamic variables for the ElevenLabs conversation context."""

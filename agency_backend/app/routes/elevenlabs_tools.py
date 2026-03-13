@@ -120,12 +120,14 @@ def register_elevenlabs_tools_routes(app):
             from .groq_proxy import generate_groq_response, ChatMessage, GROQ_MODEL
             
             system_prompt = """
-            You are a helpful voice assistant for Naturals Ice Cream.
-            Verified product data is provided below.
-            Answer the user's question using ONLY this data.
-            Keep the answer conversational, short (1-2 sentences), and natural for speaking.
-            Do not read raw data lists; summarize them.
-            If the data doesn't answer the specific question, say you don't have that info.
+            You are a voice assistant for Naturals Ice Cream. Answer ONLY what the user asked. Nothing else.
+
+            Rules:
+            - If they ask for PRICE only → say only the price (e.g. "Mango Ice Cream ka price ₹75.44 hai."). Do NOT add nutrition, ingredients, or calories unless they asked.
+            - If they ask for nutrition/calories only → give only that. If they ask for ingredients only → give only that.
+            - One short sentence is best. Two sentences only if the question has two parts.
+            - Use the product data below. If the data doesn't have what they asked, say you don't have that info.
+            - Do not read out raw lists, numbers, or extra details they did not ask for.
             """
             
             user_prompt = f"User Question: {query}\n\nProduct Data:\n{combined_info}"
@@ -137,8 +139,8 @@ def register_elevenlabs_tools_routes(app):
                         ChatMessage(role="system", content=system_prompt),
                         ChatMessage(role="user", content=user_prompt)
                     ],
-                    temperature=0.7,
-                    max_tokens=150
+                    temperature=0.3,
+                    max_tokens=80
                 )
                 final_response = voice_answer.get("content", "") if isinstance(voice_answer, dict) else voice_answer
                 

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Paths
 DOCS_DIR = Path(__file__).parent.parent.parent / "docs"
 VECTORSTORE_PATH = Path(__file__).parent.parent.parent / "vectorstore"
-KNOWLEDGE_FILE = "Creating Natural Ice Cream Database.txt"
+KNOWLEDGE_FILE = "Natural_Ice_Cream_Final_Database.txt"
 
 
 
@@ -113,6 +113,11 @@ def test_rag():
     print("\n[2] Chunking text...")
     documents = chunk_knowledge(text)
     print(f"    Created {len(documents)} chunks")
+    print("\n    ==== Chunk Details ====")
+    for idx, doc in enumerate(documents, start=1):
+        print(f"\n    --- Chunk {idx}/{len(documents)} ---")
+        print(doc.page_content)
+        print("\n    ------------------------")
     
     # Step 3: Build vectorstore
     print("\n[3] Building vectorstore...")
