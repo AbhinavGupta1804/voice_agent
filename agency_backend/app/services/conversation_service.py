@@ -98,32 +98,115 @@ class ConversationService:
         limit: int = 50,
         offset: int = 0,
     ) -> Tuple[List[Dict[str, Any]], int]:
-        """List threads for a channel, ordered by updated_at desc."""
+        """List threads for a channel, ordered by updated_at desc.
+
+        De-duplicates threads that share the same normalised phone number
+        by keeping only the one with the most recent activity.
+        """
         pool = await get_db_pool()
         if channel not in (CHANNEL_WHATSAPP, CHANNEL_SMS, CHANNEL_EMAIL):
             raise ValueError("channel must be 'whatsapp', 'sms', or 'email'")
         try:
             async with pool.acquire() as conn:
-                total = await conn.fetchval(
-                    "SELECT COUNT(*) FROM conversation_threads WHERE channel = $1",
-                    channel,
-                )
-                rows = await conn.fetch(
+                if channel == CHANNEL_EMAIL:
+                    # Email threads are keyed by email_address, no dup issue
+                    total = await conn.fetchval(
+                        "SELECT COUNT(*) FROM conversation_threads WHERE channel = $1",
+                        channel,
+                    )
+                    rows = await conn.fetch(
+                        """
+                        SELECT id, phone_number, channel, display_name, email_address, created_at, updated_at
+                        FROM conversation_threads
+                        WHERE channel = $1
+                        ORDER BY updated_at DESC
+                        LIMIT $2 OFFSET $3
+                        """,
+                        channel,
+                        limit,
+                        offset,
+                    )
+                    return [dict(r) for r in rows], total or 0
+
+                # For whatsapp/sms: de-duplicate by picking the thread with
+                # the latest updated_at per normalised phone number using
+                # DISTINCT ON.  We normalise in Python then filter.
+                all_rows = await conn.fetch(
                     """
                     SELECT id, phone_number, channel, display_name, email_address, created_at, updated_at
                     FROM conversation_threads
                     WHERE channel = $1
                     ORDER BY updated_at DESC
-                    LIMIT $2 OFFSET $3
                     """,
                     channel,
-                    limit,
-                    offset,
                 )
-                return [dict(r) for r in rows], total or 0
+                # Group by normalised phone; keep the first (most recent) per group
+                seen_phones: dict[str, bool] = {}
+                deduped: List[Dict[str, Any]] = []
+                for r in all_rows:
+                    phone_raw = r["phone_number"] or ""
+                    norm = normalize_phone_number(phone_raw) if phone_raw else phone_raw
+                    if norm in seen_phones:
+                        continue
+                    seen_phones[norm] = True
+                    d = dict(r)
+                    # Show the normalised phone number so it's consistent
+                    if norm:
+                        d["phone_number"] = norm
+                    deduped.append(d)
+
+                total = len(deduped)
+                page = deduped[offset : offset + limit]
+                return page, total
         except asyncpg.PostgresError as exc:
             logger.error(f"[Conversation] list_threads failed: {exc}")
             return [], 0
+
+    @staticmethod
+    async def _get_sibling_thread_ids(conn, thread_id: int) -> List[int]:
+        """Find all thread IDs that share the same normalized phone number and channel.
+
+        This handles duplicate threads created before phone normalisation was
+        added (e.g. +9752713547 vs +919752713547).  For email threads the
+        thread_id itself is returned unchanged.
+        """
+        thread_row = await conn.fetchrow(
+            "SELECT phone_number, channel FROM conversation_threads WHERE id = $1",
+            thread_id,
+        )
+        if not thread_row:
+            return [thread_id]
+
+        phone = thread_row["phone_number"]
+        channel = thread_row["channel"]
+
+        if not phone or channel == CHANNEL_EMAIL:
+            return [thread_id]
+
+        normalized = normalize_phone_number(phone)
+        # Strip leading '+' to get digits-only form for flexible matching
+        digits = normalized.lstrip("+")
+
+        # Match threads whose phone_number normalises to the same value
+        rows = await conn.fetch(
+            """
+            SELECT id FROM conversation_threads
+            WHERE channel = $1
+              AND (
+                phone_number = $2
+                OR phone_number = $3
+                OR phone_number = $4
+              )
+            """,
+            channel,
+            normalized,          # e.g. +919752713547
+            f"+{digits}",        # same, with +
+            digits,              # without +
+        )
+        ids = [r["id"] for r in rows]
+        if thread_id not in ids:
+            ids.append(thread_id)
+        return ids
 
     @staticmethod
     async def list_messages(
@@ -131,20 +214,26 @@ class ConversationService:
         limit: int = 100,
         before_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """List messages in a thread, oldest first (for chat UI)."""
+        """List messages in a thread, oldest first (for chat UI).
+
+        Merges messages from all sibling threads that share the same
+        normalised phone number so duplicate-thread splits are invisible.
+        """
         pool = await get_db_pool()
         try:
             async with pool.acquire() as conn:
+                sibling_ids = await ConversationService._get_sibling_thread_ids(conn, thread_id)
+
                 if before_id is not None:
                     rows = await conn.fetch(
                         """
                         SELECT id, thread_id, body, direction, sender_type, twilio_message_sid, created_at
                         FROM conversation_messages
-                        WHERE thread_id = $1 AND id < $2
+                        WHERE thread_id = ANY($1) AND id < $2
                         ORDER BY id DESC
                         LIMIT $3
                         """,
-                        thread_id,
+                        sibling_ids,
                         before_id,
                         limit,
                     )
@@ -153,14 +242,21 @@ class ConversationService:
                         """
                         SELECT id, thread_id, body, direction, sender_type, twilio_message_sid, created_at
                         FROM conversation_messages
-                        WHERE thread_id = $1
+                        WHERE thread_id = ANY($1)
                         ORDER BY id ASC
                         LIMIT $2
                         """,
-                        thread_id,
+                        sibling_ids,
                         limit,
                     )
-                out = [dict(r) for r in rows]
+                out = []
+                for r in rows:
+                    d = dict(r)
+                    if d.get("direction") is None or (isinstance(d.get("direction"), str) and d["direction"].strip() == ""):
+                        d["direction"] = DIRECTION_INBOUND
+                    if d.get("sender_type") is None or (isinstance(d.get("sender_type"), str) and d["sender_type"].strip() == ""):
+                        d["sender_type"] = SENDER_CLIENT
+                    out.append(d)
                 if before_id is not None:
                     out.reverse()
                 return out
@@ -173,22 +269,25 @@ class ConversationService:
         thread_id: int,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
-        """List the MOST RECENT messages in a thread (for LLM context)."""
+        """List the MOST RECENT messages in a thread (for LLM context).
+
+        Includes messages from sibling threads (same phone, same channel).
+        """
         pool = await get_db_pool()
         try:
             async with pool.acquire() as conn:
+                sibling_ids = await ConversationService._get_sibling_thread_ids(conn, thread_id)
                 rows = await conn.fetch(
                     """
                     SELECT id, thread_id, body, direction, sender_type, twilio_message_sid, created_at
                     FROM conversation_messages
-                    WHERE thread_id = $1
+                    WHERE thread_id = ANY($1)
                     ORDER BY id DESC
                     LIMIT $2
                     """,
-                    thread_id,
+                    sibling_ids,
                     limit,
                 )
-                # Reverse to get chronological order (Oldest -> Newest)
                 out = [dict(r) for r in rows]
                 out.reverse()
                 return out

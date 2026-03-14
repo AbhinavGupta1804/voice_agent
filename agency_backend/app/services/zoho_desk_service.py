@@ -29,12 +29,13 @@ class ZohoDeskService:
             if datetime.now() < cls._token_expires_at - timedelta(minutes=5):
                 return cls._access_token
         
-        # Refresh the token
-        logger.info("[ZohoDesk] Refreshing access token...")
+        # Refresh the token (use ZOHO_ACCOUNTS_DOMAIN to support different regions)
+        token_url = f"{getattr(Config, 'ZOHO_ACCOUNTS_DOMAIN', 'https://accounts.zoho.in').rstrip('/')}/oauth/v2/token"
+        logger.info("[ZohoDesk] Refreshing access token from %s", token_url)
         
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "https://accounts.zoho.in/oauth/v2/token",
+                token_url,
                 data={
                     "refresh_token": Config.ZOHO_REFRESH_TOKEN,
                     "client_id": Config.ZOHO_CLIENT_ID,
@@ -44,8 +45,9 @@ class ZohoDeskService:
             )
             
             if response.status_code != 200:
-                logger.error(f"[ZohoDesk] Token refresh failed: {response.text}")
-                raise Exception(f"Failed to refresh Zoho token: {response.text}")
+                err_text = response.text
+                logger.error("[ZohoDesk] Token refresh failed. Check ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN. response=%s", err_text)
+                raise Exception(f"Failed to refresh Zoho token: {err_text}")
             
             data = response.json()
             cls._access_token = data["access_token"]
@@ -83,6 +85,31 @@ class ZohoDeskService:
             }
         """
         try:
+            # Validate required config (helps debug GCP env vars)
+            missing = []
+            if not Config.ZOHO_CLIENT_ID:
+                missing.append("ZOHO_CLIENT_ID")
+            if not Config.ZOHO_CLIENT_SECRET:
+                missing.append("ZOHO_CLIENT_SECRET")
+            if not Config.ZOHO_REFRESH_TOKEN:
+                missing.append("ZOHO_REFRESH_TOKEN")
+            if not Config.ZOHO_ORG_ID:
+                missing.append("ZOHO_ORG_ID")
+            if not Config.ZOHO_DEPARTMENT_ID:
+                missing.append("ZOHO_DEPARTMENT_ID")
+            if missing:
+                msg = f"[ZohoDesk] Missing env vars: {', '.join(missing)}. Set them in Cloud Run (or .env)."
+                logger.error(msg)
+                return {"success": False, "message": msg}
+
+            api_domain = (Config.ZOHO_API_DOMAIN or "").rstrip("/")
+            org_id = str(Config.ZOHO_ORG_ID).strip() if Config.ZOHO_ORG_ID else ""
+            dept_id = str(Config.ZOHO_DEPARTMENT_ID).strip() if Config.ZOHO_DEPARTMENT_ID else ""
+            logger.info(
+                "[ZohoDesk] create_ticket config: api_domain=%s orgId=%s departmentId=%s",
+                api_domain, org_id, dept_id,
+            )
+
             access_token = await cls._get_access_token()
             
             # Map priority to Zoho format
@@ -99,12 +126,12 @@ class ZohoDeskService:
                 short_issue += "…"
             subject = f"[{zoho_priority}] {customer_name} — {short_issue}"
 
-            # Build ticket payload
+            # Build ticket payload (Zoho API accepts string or number for departmentId)
             ticket_data = {
                 "subject": subject,
                 "description": issue_description,
                 "priority": zoho_priority,
-                "departmentId": Config.ZOHO_DEPARTMENT_ID,
+                "departmentId": dept_id or Config.ZOHO_DEPARTMENT_ID,
                 "channel": "Phone",
                 "status": "Open",
                 "classification": "Problem",
@@ -126,14 +153,18 @@ class ZohoDeskService:
             
             ticket_data["contact"] = contact
             
-            logger.info(f"[ZohoDesk] Creating ticket for {customer_name}: {issue_description[:50]}...")
+            create_url = f"{api_domain}/api/v1/tickets"
+            logger.info(
+                "[ZohoDesk] Creating ticket for %s: POST %s (orgId=%s)",
+                customer_name, create_url, org_id,
+            )
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{Config.ZOHO_API_DOMAIN}/api/v1/tickets",
+                    create_url,
                     headers={
                         "Authorization": f"Zoho-oauthtoken {access_token}",
-                        "orgId": Config.ZOHO_ORG_ID,
+                        "orgId": org_id,
                         "Content-Type": "application/json",
                     },
                     json=ticket_data,
@@ -146,7 +177,10 @@ class ZohoDeskService:
                     zoho_long_id = data.get("id")
                     ticket_number = data.get("ticketNumber")
                     
-                    logger.info(f"[ZohoDesk] Ticket #{ticket_number} created successfully (ID: {zoho_long_id})")
+                    logger.info(
+                        "[ZohoDesk] Ticket created in Zoho: ticketNumber=%s id=%s (save as zoho_ticket_id in DB)",
+                        ticket_number, zoho_long_id,
+                    )
                     
                     return {
                         "success": True,
@@ -155,10 +189,14 @@ class ZohoDeskService:
                         "message": f"Ticket #{ticket_number} create ho gaya hai {customer_name} ji ke liye. Humari team jaldi contact karegi.",
                     }
                 else:
-                    logger.error(f"[ZohoDesk] Failed to create ticket: {response.status_code} - {response.text}")
+                    err_body = response.text
+                    logger.error(
+                        "[ZohoDesk] Create ticket failed. status=%s body=%s orgId=%s departmentId=%s url=%s",
+                        response.status_code, err_body, org_id, dept_id, create_url,
+                    )
                     return {
                         "success": False,
-                        "message": f"Zoho Desk error: {response.text}",
+                        "message": f"Zoho Desk error: {err_body}",
                     }
                     
         except Exception as e:
@@ -172,21 +210,24 @@ class ZohoDeskService:
     async def get_ticket(cls, ticket_id: str) -> Optional[Dict[str, Any]]:
         """Get ticket details by ID."""
         try:
+            org_id = str(Config.ZOHO_ORG_ID).strip() if Config.ZOHO_ORG_ID else ""
+            api_domain = (Config.ZOHO_API_DOMAIN or "").rstrip("/")
+            url = f"{api_domain}/api/v1/tickets/{ticket_id}"
             access_token = await cls._get_access_token()
             
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"{Config.ZOHO_API_DOMAIN}/api/v1/tickets/{ticket_id}",
+                    url,
                     headers={
                         "Authorization": f"Zoho-oauthtoken {access_token}",
-                        "orgId": Config.ZOHO_ORG_ID,
+                        "orgId": org_id,
                     },
                 )
                 
                 if response.status_code == 200:
                     return response.json()
                 else:
-                    logger.error(f"[ZohoDesk] Failed to get ticket {ticket_id}: {response.text}")
+                    logger.error("[ZohoDesk] Failed to get ticket: status=%s body=%s url=%s", response.status_code, response.text, url)
                     return None
                     
         except Exception as e:
@@ -201,13 +242,21 @@ class ZohoDeskService:
         Uses PATCH so only the description field is updated.
         """
         try:
+            if not Config.ZOHO_ORG_ID:
+                logger.error("[ZohoDesk] update_ticket_description: ZOHO_ORG_ID not set")
+                return {"success": False, "message": "ZOHO_ORG_ID not set"}
+            org_id = str(Config.ZOHO_ORG_ID).strip()
+            api_domain = (Config.ZOHO_API_DOMAIN or "").rstrip("/")
+            patch_url = f"{api_domain}/api/v1/tickets/{zoho_ticket_id}"
+            logger.info("[ZohoDesk] update_ticket_description: PATCH %s orgId=%s", patch_url, org_id)
+            
             access_token = await cls._get_access_token()
             async with httpx.AsyncClient() as client:
                 response = await client.patch(
-                    f"{Config.ZOHO_API_DOMAIN}/api/v1/tickets/{zoho_ticket_id}",
+                    patch_url,
                     headers={
                         "Authorization": f"Zoho-oauthtoken {access_token}",
-                        "orgId": Config.ZOHO_ORG_ID,
+                        "orgId": org_id,
                         "Content-Type": "application/json",
                     },
                     json={"description": new_description},
@@ -219,7 +268,10 @@ class ZohoDeskService:
                         len(new_description),
                     )
                     return {"success": True, "message": "Ticket description updated."}
-                logger.error(f"[ZohoDesk] Failed to update ticket: {response.status_code} - {response.text}")
+                logger.error(
+                    "[ZohoDesk] Failed to update ticket: status=%s body=%s url=%s",
+                    response.status_code, response.text, patch_url,
+                )
                 return {"success": False, "message": response.text}
         except Exception as e:
             logger.error(f"[ZohoDesk] Exception updating ticket: {e}", exc_info=True)

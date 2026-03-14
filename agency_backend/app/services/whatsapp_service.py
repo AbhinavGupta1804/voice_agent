@@ -41,7 +41,8 @@ class WhatsAppService:
         include_brochure: bool = True,
         ticket_id: Optional[int] = None,
         issue: Optional[str] = None,
-        call_id: Optional[str] = None
+        call_id: Optional[str] = None,
+        summary_body_for_conversation: Optional[str] = None,
     ) -> dict:
         """
         Send a call summary or ticket confirmation via WhatsApp.
@@ -116,10 +117,32 @@ We will contact you soon to resolve this.
                             "message_body": message_body  # Return the actual message sent
                         }
             else:
-                # If no ticket, do NOT send anything
-                logger.info(f"[WhatsApp] No ticket raised for {to_number}, skipping WhatsApp notification.")
+                # No ticket: send call summary so it appears on Chats page and customer gets it
+                body_to_send = (summary_body_for_conversation or "").strip()
+                if body_to_send:
+                    message_params = {
+                        "from_": whatsapp_from,
+                        "to": whatsapp_to,
+                        "body": body_to_send
+                    }
+                    message = await cls._send_with_retry(
+                        client, message_params, to_number
+                    )
+                    logger.info(f"[WhatsApp] Call summary sent to {to_number}, sid: {message.sid}")
+                    if follow_up_date and call_id:
+                        await cls._send_interactive_buttons(
+                            client, whatsapp_from, whatsapp_to, follow_up_date, call_id
+                        )
+                    return {
+                        "success": True,
+                        "message_sid": message.sid,
+                        "to": to_number,
+                        "status": message.status,
+                        "message_body": body_to_send
+                    }
+                logger.info(f"[WhatsApp] No ticket and no summary body for {to_number}, skipping.")
                 return {
-                    "success": True,  # Return true to indicate no error occurred (just skipped)
+                    "success": True,
                     "message_sid": None,
                     "to": to_number,
                     "status": "skipped",

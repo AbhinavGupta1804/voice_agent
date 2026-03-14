@@ -171,6 +171,11 @@ def register_elevenlabs_tools_routes(app):
         ElevenLabs Custom Tool: Create a new complain ticket.
         If phone_number is empty, resolves it from conversation_id (body or X-Conversation-Id header).
         """
+        # Log immediately so you can confirm which server received the request (local vs Cloud Run)
+        logger.info(
+            "[ElevenLabs Tool] create_ticket ENDPOINT HIT - customer=%s issue_len=%d (this server is creating ticket + pushing to Zoho)",
+            request.customer_name, len(request.issue_description or ""),
+        )
         try:
             conversation_id = request.conversation_id or x_conversation_id
             phone_number = request.phone_number or ""

@@ -108,6 +108,11 @@ export interface CallFailedData {
   metadata: Record<string, unknown>;
 }
 
+export interface ConversationMessageData {
+  thread_id: number;
+  channel?: string;
+}
+
 // Analytics Types (for future use)
 export interface AnalyticsOverview {
   total_calls: number;
@@ -211,8 +216,8 @@ export interface ConversationMessage {
   id: number;
   thread_id: number;
   body: string;
-  direction: "inbound" | "outbound";
-  sender_type: MessageSenderType;
+  direction: "inbound" | "outbound" | null;
+  sender_type: MessageSenderType | null;
   twilio_message_sid: string | null;
   created_at: string;
 }

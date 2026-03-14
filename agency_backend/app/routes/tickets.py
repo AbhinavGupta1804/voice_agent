@@ -1,9 +1,11 @@
 from typing import List
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 
 from ..models.ticket_models import TicketCreate, TicketResponse
 from ..services.ticket_service import TicketService
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tickets", tags=["Support Tickets"])
 
 @router.post("/", response_model=TicketResponse)
@@ -11,6 +13,7 @@ async def create_ticket(ticket: TicketCreate):
     """
     Create a new support ticket.
     """
+    logger.info("[Tickets API] POST /tickets/ - creating ticket for %s", ticket.customer_name)
     created_ticket = await TicketService.create_ticket(ticket)
     if not created_ticket:
         raise HTTPException(status_code=500, detail="Failed to create ticket")

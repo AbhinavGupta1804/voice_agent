@@ -27,11 +27,11 @@ class OpenAIService:
         """
         Detect if a call is inbound or outbound based on the agent's first message in the transcript.
         
-        Logic (Hindi first messages):
-        - Inbound: "Namaste! Main Neha..." (no name after Namaste)
-        - Outbound: "Namaste {name}! Main Neha..." (name after Namaste)
+        Logic (English first messages):
+        - Inbound: "Hello! This is Neha..." (no name after Hello)
+        - Outbound: "Hello {name}! This is Neha..." (name after Hello)
         
-        Fallback for legacy English: "Hey Sir" = inbound, "Hey {name}" = outbound.
+        Fallback for legacy: "Hey Sir" = inbound, "Hey {name}" = outbound; "Namaste!" = inbound, "Namaste {name}" = outbound.
         
         Args:
             transcript: The call transcript text
@@ -49,26 +49,26 @@ class OpenAIService:
                 message = line[len('agent:'):].strip()
                 message_lower = message.lower()
 
-                # Hindi: "Namaste! Main Neha..." = inbound (no name)
-                if message_lower.startswith('namaste!'):
-                    logger.info("[OpenAI] Detected call_type='inbound' from transcript (agent said 'Namaste!')")
+                # English: "Hello! This is Neha..." = inbound (no name)
+                if message_lower.startswith('hello!'):
+                    logger.info("[OpenAI] Detected call_type='inbound' from transcript (agent said 'Hello!')")
                     return "inbound"
-                # Hindi: "Namaste {name}! Main Neha..." = outbound
-                if message_lower.startswith('namaste '):
+                # English: "Hello {name}! This is Neha..." = outbound
+                if message_lower.startswith('hello '):
                     words = message_lower.split()
                     if len(words) > 1:
                         second_word = words[1].strip(',!?')
-                        if second_word and second_word != 'ji':
-                            logger.info(f"[OpenAI] Detected call_type='outbound' from transcript (agent said 'Namaste {second_word}')")
+                        if second_word and second_word not in ('this', 'there'):
+                            logger.info(f"[OpenAI] Detected call_type='outbound' from transcript (agent said 'Hello {second_word}')")
                             return "outbound"
-                    logger.info("[OpenAI] Detected call_type='inbound' from transcript (Namaste with no name)")
+                    logger.info("[OpenAI] Detected call_type='inbound' from transcript (Hello with no name)")
                     return "inbound"
 
-                # Legacy English: "Hey Sir" = inbound
+                # Legacy: "Hey Sir" = inbound
                 if message_lower.startswith('hey sir') or message_lower.startswith('hey, sir'):
                     logger.info("[OpenAI] Detected call_type='inbound' from transcript (agent said 'Hey Sir')")
                     return "inbound"
-                # Legacy English: "Hey {name}" = outbound
+                # Legacy: "Hey {name}" = outbound
                 if message_lower.startswith('hey '):
                     words = message_lower.split()
                     if len(words) > 1:
@@ -76,6 +76,19 @@ class OpenAIService:
                         if second_word and second_word != 'sir' and second_word != 'there':
                             logger.info(f"[OpenAI] Detected call_type='outbound' from transcript (agent said 'Hey {second_word}')")
                             return "outbound"
+                # Legacy Hindi: "Namaste! Main Neha..." = inbound
+                if message_lower.startswith('namaste!'):
+                    logger.info("[OpenAI] Detected call_type='inbound' from transcript (agent said 'Namaste!')")
+                    return "inbound"
+                # Legacy Hindi: "Namaste {name}! Main Neha..." = outbound
+                if message_lower.startswith('namaste '):
+                    words = message_lower.split()
+                    if len(words) > 1:
+                        second_word = words[1].strip(',!?')
+                        if second_word and second_word != 'ji':
+                            logger.info(f"[OpenAI] Detected call_type='outbound' from transcript (agent said 'Namaste {second_word}')")
+                            return "outbound"
+                    return "inbound"
         
         logger.warning("[OpenAI] Could not detect call_type from transcript")
         return None

@@ -115,7 +115,7 @@ class InboundWebSocketHandler:
         
         Kept short to minimise TTS latency — every word adds ~50-100ms.
         """
-        return "Namaste! Main Neha bol rahi hoon, Naturals Ice Cream se. Aapki kaise madad kar sakti hoon?"
+        return "Hello! This is Neha calling from Naturals Ice Cream. How may I help you?"
 
     def _build_dynamic_variables(self) -> dict:
         """Assemble dynamic variables for the ElevenLabs conversation context."""

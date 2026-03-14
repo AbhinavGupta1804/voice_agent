@@ -17,6 +17,11 @@ class TicketService:
     @staticmethod
     async def create_ticket(ticket_data: TicketCreate) -> Optional[TicketResponse]:
         """Create a new support ticket."""
+        logger.info(
+            "[TicketService] create_ticket called: customer=%s, priority=%s",
+            ticket_data.customer_name,
+            ticket_data.priority,
+        )
         pool = await get_db_pool()
         
         # Normalize phone number
@@ -41,6 +46,7 @@ class TicketService:
                     logger.info(f"[TicketService] Created ticket #{row['ticket_id']} for {ticket_data.customer_name}")
 
                     # Also push to Zoho Desk so ticket is visible in CRM
+                    logger.info("[TicketService] Pushing ticket #%s to Zoho Desk (CRM)", row["ticket_id"])
                     try:
                         zoho_result = await ZohoDeskService.create_ticket(
                             customer_name=ticket_data.customer_name,
@@ -58,15 +64,26 @@ class TicketService:
                                     str(zoho_long_id), row["ticket_id"],
                                 )
                                 logger.info(
-                                    "[TicketService] Saved zoho_ticket_id (CRM long id) for website ticket #%s, CRM display #%s",
-                                    row["ticket_id"],
-                                    zoho_result.get("ticket_number"),
+                                    "[TicketService] DB updated: website ticket #%s -> zoho_ticket_id=%s (Zoho display #%s)",
+                                    row["ticket_id"], zoho_long_id, zoho_result.get("ticket_number"),
                                 )
-                            logger.info(f"[TicketService] Pushed to Zoho Desk (CRM ticket #%s)", zoho_result.get("ticket_number"))
+                            else:
+                                logger.warning(
+                                    "[TicketService] Zoho returned success but no ticket_id; not saving zoho_ticket_id for #%s",
+                                    row["ticket_id"],
+                                )
+                            logger.info("[TicketService] Pushed to Zoho Desk (CRM ticket #%s)", zoho_result.get("ticket_number"))
                         else:
-                            logger.warning(f"[TicketService] Zoho Desk create failed: {zoho_result.get('message', 'unknown')}")
+                            logger.warning(
+                                "[TicketService] Zoho Desk create failed (ticket is on website only): %s",
+                                zoho_result.get("message", "unknown"),
+                            )
                     except Exception as zoho_err:
-                        logger.warning(f"[TicketService] Zoho Desk sync failed (ticket still in DB): {zoho_err}")
+                        logger.warning(
+                            "[TicketService] Zoho Desk sync failed (ticket still in DB): %s",
+                            zoho_err,
+                            exc_info=True,
+                        )
 
                     return ticket_response
                 return None

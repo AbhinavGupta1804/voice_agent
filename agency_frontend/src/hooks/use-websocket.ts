@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { getWebSocketUrl } from '@/lib/api';
-import type { WebSocketMessage, CallInProgressData, CallCompletedData, CallAudioReadyData, CallFailedData } from '@/lib/types';
+import type { WebSocketMessage, CallInProgressData, CallCompletedData, CallAudioReadyData, CallFailedData, ConversationMessageData } from '@/lib/types';
 
 interface WebSocketOptions {
   onCallInProgress?: (data: CallInProgressData) => void;
   onCallCompleted?: (data: CallCompletedData) => void;
   onCallAudioReady?: (data: CallAudioReadyData) => void;
   onCallFailed?: (data: CallFailedData) => void;
+  onConversationMessage?: (data: ConversationMessageData) => void;
   onConnect?: () => void;
   onDisconnect?: () => void;
   onError?: (error: Event) => void;
@@ -167,6 +168,7 @@ export function useDashboardWebSocket(options: WebSocketOptions = {}) {
     onCallCompleted,
     onCallAudioReady,
     onCallFailed,
+    onConversationMessage,
     onConnect,
     onDisconnect,
   } = options;
@@ -179,6 +181,7 @@ export function useDashboardWebSocket(options: WebSocketOptions = {}) {
     onCallCompleted,
     onCallAudioReady,
     onCallFailed,
+    onConversationMessage,
     onConnect,
     onDisconnect,
   });
@@ -190,10 +193,11 @@ export function useDashboardWebSocket(options: WebSocketOptions = {}) {
       onCallCompleted,
       onCallAudioReady,
       onCallFailed,
+      onConversationMessage,
       onConnect,
       onDisconnect,
     };
-  }, [onCallInProgress, onCallCompleted, onCallAudioReady, onCallFailed, onConnect, onDisconnect]);
+  }, [onCallInProgress, onCallCompleted, onCallAudioReady, onCallFailed, onConversationMessage, onConnect, onDisconnect]);
 
   useEffect(() => {
     const manager = WebSocketManager.getInstance();
@@ -214,6 +218,9 @@ export function useDashboardWebSocket(options: WebSocketOptions = {}) {
           break;
         case 'call_failed':
           callbacks.onCallFailed?.(data as CallFailedData);
+          break;
+        case 'conversation_message':
+          callbacks.onConversationMessage?.(data as ConversationMessageData);
           break;
         default:
           console.log('[WebSocket] Unknown event:', event);

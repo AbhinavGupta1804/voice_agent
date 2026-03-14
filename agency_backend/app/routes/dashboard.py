@@ -144,46 +144,52 @@ def register_dashboard_routes(app):
     @router.post("/api/conversation-threads/{thread_id}/send")
     async def send_conversation_message(thread_id: int, body: SendMessageRequest):
         """Client sends a message into the thread; deliver via WhatsApp or SMS."""
-        thread = await ConversationService.get_thread(thread_id)
-        if not thread:
-            raise HTTPException(status_code=404, detail="Thread not found")
-        channel = thread["channel"]
-        phone_number = thread.get("phone_number")
-        email_address = thread.get("email_address")
-        message_sid = None
-        if channel == "whatsapp":
-            if not phone_number:
-                raise HTTPException(status_code=400, detail="Thread has no phone number")
-            result = await WhatsAppService.send_simple_message(phone_number, body.body)
-            if not result.get("success"):
-                raise HTTPException(status_code=502, detail=result.get("error", "Failed to send WhatsApp message"))
-            message_sid = result.get("message_sid")
-        elif channel == "sms":
-            if not phone_number:
-                raise HTTPException(status_code=400, detail="Thread has no phone number")
-            result = await twilio_service.send_sms(phone_number, body.body)
-            if not result.get("success"):
-                raise HTTPException(status_code=502, detail=result.get("error", "Failed to send SMS"))
-            message_sid = result.get("message_sid")
-        elif channel == "email":
-            if not email_address:
-                raise HTTPException(status_code=400, detail="Thread has no email address")
-            result = await EmailService.send_simple_email(to_email=email_address, body=body.body)
-            if not result.get("success"):
-                raise HTTPException(status_code=502, detail=result.get("error", "Failed to send email"))
-        else:
-            raise HTTPException(status_code=400, detail="Unknown channel")
-        msg = await ConversationService.add_message(
-            thread_id=thread_id,
-            body=body.body,
-            direction="outbound",
-            sender_type="client",
-            twilio_message_sid=message_sid,
-        )
-        if not msg:
-            raise HTTPException(status_code=500, detail="Message saved but failed to persist")
-        await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "message": msg})
-        return ConversationMessageResponse(**msg)
+        try:
+            thread = await ConversationService.get_thread(thread_id)
+            if not thread:
+                raise HTTPException(status_code=404, detail="Thread not found")
+            channel = thread["channel"]
+            phone_number = thread.get("phone_number")
+            email_address = thread.get("email_address")
+            message_sid = None
+            if channel == "whatsapp":
+                if not phone_number:
+                    raise HTTPException(status_code=400, detail="Thread has no phone number")
+                result = await WhatsAppService.send_simple_message(phone_number, body.body)
+                if not result.get("success"):
+                    raise HTTPException(status_code=502, detail=result.get("error", "Failed to send WhatsApp message"))
+                message_sid = result.get("message_sid")
+            elif channel == "sms":
+                if not phone_number:
+                    raise HTTPException(status_code=400, detail="Thread has no phone number")
+                result = await twilio_service.send_sms(phone_number, body.body)
+                if not result.get("success"):
+                    raise HTTPException(status_code=502, detail=result.get("error", "Failed to send SMS"))
+                message_sid = result.get("message_sid")
+            elif channel == "email":
+                if not email_address:
+                    raise HTTPException(status_code=400, detail="Thread has no email address")
+                result = await EmailService.send_simple_email(to_email=email_address, body=body.body)
+                if not result.get("success"):
+                    raise HTTPException(status_code=502, detail=result.get("error", "Failed to send email"))
+            else:
+                raise HTTPException(status_code=400, detail="Unknown channel")
+            msg = await ConversationService.add_message(
+                thread_id=thread_id,
+                body=body.body,
+                direction="outbound",
+                sender_type="client",
+                twilio_message_sid=message_sid,
+            )
+            if not msg:
+                raise HTTPException(status_code=500, detail="Message saved but failed to persist")
+            # Convert to Pydantic model first so datetime is serialized to string
+            msg_response = ConversationMessageResponse(**msg)
+            await dashboard_manager.broadcast("conversation_message", {"thread_id": thread_id, "message": msg_response.model_dump(mode="json")})
+            return msg_response
+        except Exception as e:
+            logger.error(f"[Dashboard] Error sending conversation message: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/api/initiate_call")
     async def initiate_call(request_data: OutboundCallRequest, request: Request):

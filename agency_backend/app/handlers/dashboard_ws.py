@@ -2,11 +2,21 @@
 import asyncio
 import json
 import logging
+from datetime import date, datetime
 from typing import Set
 
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
+
+
+def _json_default(obj):
+    """Handle datetime and date objects so json.dumps never fails."""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, date):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 class DashboardConnectionManager:
@@ -34,7 +44,7 @@ class DashboardConnectionManager:
         if not connections:
             return
 
-        message = json.dumps({"event": event, "data": payload})
+        message = json.dumps({"event": event, "data": payload}, default=_json_default)
 
         async def _send(ws: WebSocket):
             try:

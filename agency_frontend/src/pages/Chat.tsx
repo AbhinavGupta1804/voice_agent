@@ -14,7 +14,9 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useConversationThreads, useThreadMessages, useSendConversationMessage } from "@/hooks/use-conversations";
+import { useQueryClient } from "@tanstack/react-query";
+import { useConversationThreads, useThreadMessages, useSendConversationMessage, conversationKeys } from "@/hooks/use-conversations";
+import { useDashboardWebSocket } from "@/hooks/use-websocket";
 import type { ConversationThread, ConversationMessage, ConversationChannel } from "@/lib/types";
 
 function formatTime(iso: string): string {
@@ -29,12 +31,12 @@ function MessageBubble({
   msg: ConversationMessage;
   isOutbound: boolean;
 }) {
+  // Treat missing direction as inbound so customer messages always show (e.g. legacy DB rows)
+  const direction = msg.direction ?? "inbound";
   const senderLabel =
-    msg.direction === "inbound"
+    direction === "inbound"
       ? "Customer"
-      : msg.sender_type === "bot"
-        ? "Sent by bot"
-        : "Sent by you";
+      : (msg.sender_type === "bot" ? "Sent by bot" : "Sent by you");
 
   return (
     <div
@@ -61,6 +63,7 @@ function MessageBubble({
 }
 
 export default function Chat() {
+  const queryClient = useQueryClient();
   const [channel, setChannel] = useState<ConversationChannel>("whatsapp");
   const [selectedThread, setSelectedThread] = useState<ConversationThread | null>(null);
   const [sendText, setSendText] = useState("");
@@ -75,6 +78,14 @@ export default function Chat() {
     selectedThread?.id ?? null
   );
   const sendMessage = useSendConversationMessage(selectedThread?.id ?? null);
+
+  // Refetch messages and threads when a new conversation message arrives (inbound or bot reply)
+  useDashboardWebSocket({
+    onConversationMessage: (data) => {
+      queryClient.invalidateQueries({ queryKey: conversationKeys.messages(data.thread_id) });
+      queryClient.invalidateQueries({ queryKey: conversationKeys.all });
+    },
+  });
 
   const threads = threadsData?.items ?? [];
   const messages = messagesData?.messages ?? [];
@@ -216,7 +227,7 @@ export default function Chat() {
                       <div key={msg.id} className="mb-4">
                         <MessageBubble
                           msg={msg}
-                          isOutbound={msg.direction === "outbound"}
+                          isOutbound={(msg.direction ?? "inbound") === "outbound"}
                         />
                       </div>
                     ))}

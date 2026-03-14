@@ -42,9 +42,19 @@ export function useSendConversationMessage(threadId: number | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (body: string) => sendConversationMessage(threadId!, body),
-    onSuccess: (_, __, context) => {
-      if (threadId != null)
-        queryClient.invalidateQueries({ queryKey: conversationKeys.messages(threadId) });
+    onSuccess: (newMessage, _, __) => {
+      if (threadId == null || !newMessage) return;
+      // Optimistically add the sent message to the cache so it shows immediately
+      const messagesKey = conversationKeys.messages(threadId);
+      const prev = queryClient.getQueryData<{ thread_id: number; messages: unknown[] }>(messagesKey);
+      if (prev && Array.isArray(prev.messages)) {
+        queryClient.setQueryData(messagesKey, {
+          ...prev,
+          messages: [...prev.messages, newMessage],
+        });
+      } else {
+        queryClient.invalidateQueries({ queryKey: messagesKey });
+      }
       queryClient.invalidateQueries({ queryKey: conversationKeys.all });
     },
   });

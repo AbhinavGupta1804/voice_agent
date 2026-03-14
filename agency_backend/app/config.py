@@ -61,6 +61,8 @@ class Config:
     ZOHO_ORG_ID = os.getenv("ZOHO_ORG_ID")
     ZOHO_DEPARTMENT_ID = os.getenv("ZOHO_DEPARTMENT_ID")
     ZOHO_API_DOMAIN = os.getenv("ZOHO_API_DOMAIN", "https://desk.zoho.in")
+    # Token refresh – must match Zoho region (India=.in, US=.com, EU=.eu)
+    ZOHO_ACCOUNTS_DOMAIN = os.getenv("ZOHO_ACCOUNTS_DOMAIN", "https://accounts.zoho.in")
     
     # Server Configuration
     PORT = int(os.getenv("PORT", "8000"))

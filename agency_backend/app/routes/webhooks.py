@@ -479,8 +479,9 @@ def register_webhook_routes(app):
             logger.info(f"[DEBUG] Sending Reply: {response_message}")
             result = await WhatsAppService.send_simple_message(from_number, response_message)
             message_sid = result.get("message_sid") if isinstance(result, dict) else None
-            
-            if thread_id and message_sid:
+
+            # Always store bot reply in conversation so it shows on website (even if Twilio didn't return sid)
+            if thread_id:
                 await ConversationService.add_message(
                     thread_id=thread_id,
                     body=response_message,
@@ -488,7 +489,7 @@ def register_webhook_routes(app):
                     sender_type="bot",
                     twilio_message_sid=message_sid,
                 )
-                logger.info(f"[DEBUG] Outbound Reply Saved: {message_sid}")
+                logger.info(f"[DEBUG] Outbound Reply Saved: sid={message_sid}")
 
             return Response(content="", media_type="application/xml")
         except Exception as exc:
@@ -870,7 +871,8 @@ async def _send_post_call_notifications(payload: CallCompletePayload, record: di
         # Could extend to payload/record if we add email_address there later
         return None
 
-    summary_text = payload.summary or "No summary available."
+    # Use summary from payload; fallback to record (DB) so SMS and conversation always show the same text
+    summary_text = (payload.summary or (record.get("summary") if record else None) or "").strip() or "No summary available."
     summary_body_for_conversation = _build_post_call_summary_body(
         payload.client_name, summary_text, payload.follow_up_date
     )
@@ -911,7 +913,8 @@ async def _send_post_call_notifications(payload: CallCompletePayload, record: di
                 follow_up_date=payload.follow_up_date,
                 call_id=payload.call_id,
                 ticket_id=latest_ticket_id,
-                issue=latest_issue
+                issue=latest_issue,
+                summary_body_for_conversation=summary_body_for_conversation,
             )
             if whatsapp_result is None:
                 whatsapp_result = {"success": False, "error": "No response from WhatsApp service"}
