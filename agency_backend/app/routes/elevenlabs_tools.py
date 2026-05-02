@@ -37,7 +37,7 @@ class CreateTicketRequest(BaseModel):
     issue_description: str = Field(..., description="Details of the issue or complaint")
     phone_number: Optional[str] = Field(None, description="Phone number associated with the ticket")
     conversation_id: Optional[str] = Field(None, description="ElevenLabs conversation ID; used to resolve phone if phone_number is empty")
-    priority: str = Field("Medium", description="Priority level: High, Medium, or Low")
+    priority: Optional[str] = Field("Medium", description="Priority level: High, Medium, or Low")
 
 class TicketToolResponse(BaseModel):
     """Response model for ticket actions."""
@@ -77,6 +77,13 @@ class BookSlotRequest(BaseModel):
 class BookSlotResponse(BaseModel):
     """Response model for booking confirmation."""
     response: str = Field(..., description="The text for the agent to speak")
+
+
+class CurrentDateResponse(BaseModel):
+    """Response model for current date/time lookup."""
+    datetime: str = Field(..., description="Current datetime in ISO 8601 format (IST)")
+    date: str = Field(..., description="Current date in YYYY-MM-DD format (IST)")
+    timezone: str = Field(..., description="Timezone name")
 
 
 def register_elevenlabs_tools_routes(app):
@@ -120,14 +127,20 @@ def register_elevenlabs_tools_routes(app):
             from .groq_proxy import generate_groq_response, ChatMessage, GROQ_MODEL
             
             system_prompt = """
-            You are a voice assistant for Naturals Ice Cream. Answer ONLY what the user asked. Nothing else.
+            You are a voice assistant for Naturals Ice Cream. Answer ONLY what the user asked, in clear English.
 
-            Rules:
-            - If they ask for PRICE only → say only the price (e.g. "Mango Ice Cream ka price ₹75.44 hai."). Do NOT add nutrition, ingredients, or calories unless they asked.
-            - If they ask for nutrition/calories only → give only that. If they ask for ingredients only → give only that.
-            - One short sentence is best. Two sentences only if the question has two parts.
-            - Use the product data below. If the data doesn't have what they asked, say you don't have that info.
-            - Do not read out raw lists, numbers, or extra details they did not ask for.
+            Product match (critical):
+            - First infer which specific product or flavor the customer asked about (e.g. vanilla ice cream, veggie iced tea).
+            - Use ONLY passages that clearly describe that same product or flavor. If the passages are mainly about a different product (e.g. customer asked vanilla but the text is only about Malai), do NOT answer using the wrong product. Say briefly that you are sorry, you do not have that information for what they asked, and offer to help with something else.
+            - Never blend or substitute another SKU's nutrition, price, or description as if it were the one they asked about.
+
+            Answer shape:
+            - If they ask for PRICE only → say only the price for that product. Do NOT add nutrition, ingredients, or calories unless they asked.
+            - If they ask for calories (or nutrition) only → give only that for that product, one short sentence. Do NOT add price, full macros, ingredients, or other facts unless they asked.
+            - If they ask for ingredients only → give only that.
+            - One short sentence is best. Two sentences only if the question clearly has two parts.
+            - If the product data does not contain the exact detail they asked for (for the matched product), say you don't have that information—do not guess or pad from unrelated lines.
+            - Do not read out raw lists or extra numbers they did not ask for.
             """
             
             user_prompt = f"User Question: {query}\n\nProduct Data:\n{combined_info}"
@@ -179,6 +192,8 @@ def register_elevenlabs_tools_routes(app):
         try:
             conversation_id = request.conversation_id or x_conversation_id
             phone_number = request.phone_number or ""
+            # Defensive fallback: some callers may send priority as null.
+            normalized_priority = (request.priority or "Medium").strip() or "Medium"
             if not phone_number.strip() and conversation_id:
                 resolved = await CallRecordService.get_phone_number_from_conversation(request.conversation_id)
                 if resolved:
@@ -191,7 +206,7 @@ def register_elevenlabs_tools_routes(app):
                 customer_name=request.customer_name,
                 issue_description=request.issue_description,
                 phone_number=phone_number or None,
-                priority=request.priority
+                priority=normalized_priority
             )
             
             created_ticket = await TicketService.create_ticket(ticket_data)
@@ -429,5 +444,18 @@ def register_elevenlabs_tools_routes(app):
         except Exception as e:
             logger.error("[ElevenLabs Tool] book_slots error: %s", e, exc_info=True)
             return BookSlotResponse(response="System error. Booking nahi ho paayi.")
+
+    @router.get("/get_current_date", response_model=CurrentDateResponse)
+    async def get_current_date():
+        """
+        ElevenLabs Custom Tool: Fetch current date/time in IST.
+        Useful for converting relative dates like "today" or "tomorrow".
+        """
+        now_ist = datetime.now(IST)
+        return CurrentDateResponse(
+            datetime=now_ist.isoformat(),
+            date=now_ist.strftime("%Y-%m-%d"),
+            timezone="Asia/Kolkata",
+        )
 
     app.include_router(router)

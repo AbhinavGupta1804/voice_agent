@@ -1,0 +1,1048 @@
+{
+  "agent_id": "",
+  "channel": "voice",
+  "last_modification_timestamp": 1776938858435,
+  "agent_name": "New Claude Agent",
+  "response_engine": {
+    "type": "conversation-flow",
+    "version": 2,
+    "conversation_flow_id": "conversation_flow_66469b690964"
+  },
+  "language": "en-US",
+  "data_storage_setting": "everything",
+  "opt_in_signed_url": false,
+  "version": 2,
+  "is_published": false,
+  "version_title": "v2",
+  "post_call_analysis_model": "gpt-4.1-mini",
+  "pii_config": {
+    "mode": "post_call",
+    "categories": []
+  },
+  "handbook_config": {
+    "natural_filler_words": true,
+    "speech_normalization": false,
+    "ai_disclosure": true,
+    "default_personality": true
+  },
+  "voice_id": "retell-Cimo",
+  "max_call_duration_ms": 3600000,
+  "interruption_sensitivity": 0.9,
+  "ambient_sound": "call-center",
+  "normalize_for_speech": false,
+  "voicemail_option": {
+    "action": {
+      "type": "hangup"
+    }
+  },
+  "ivr_option": {
+    "action": {
+      "type": "hangup"
+    }
+  },
+  "stt_mode": "accurate",
+  "allow_user_dtmf": true,
+  "user_dtmf_options": {},
+  "conversationFlow": {
+    "conversation_flow_id": "conversation_flow_66469b690964",
+    "version": 2,
+    "global_prompt": "You are Neha, a friendly customer support voice agent for Naturals Ice Cream, serving customers in India.\n\nSpeak only in English — natural, conversational, polite, and human-like. Avoid formal or robotic language.\n\nNever show API responses, timestamps, or JSON to the user.\n\nNever display:\nstart\nend\nstartTime\nendTime\nISO timestamps\n\nAlways convert times into natural speech like:\n\"3 PM\"\n\"10:30 AM\"\n\nCore Responsibilities:\n- Quickly understand customer intent (product query, complaint, delivery/service issue, appointment request, general info).\n- Keep responses short, conversational, and clear for voice interaction.\n- Use occasional natural filler phrases (e.g., hmm, okay, umm, ah) to sound human, but don’t overuse them.\n- Always acknowledge the customer’s concern before responding.\n- Always end with a clear next step (info provided, ticket raised, appointment booked, etc.).\n\nTool Usage Rules:\n\n1. Product / Service Queries:\n- Always call product_lookup first.\n- Then respond strictly using the returned information.\n- If the returned info does not clearly match the exact flavor/product the customer asked (or flavor is not found), say exactly: \"Sorry, I don't have information about that particular flavor.\"\n- Do not guess or add extra details, and do not substitute another flavor.\n\n2. Complaints / Delivery Issues / Dissatisfaction:\n- First, politely ask for the customer’s name.\n- Do NOT ask for phone number (already captured from call metadata).\n- After receiving the name, call create_ticket.\n- Then confirm politely that the support ticket has been created and the team will contact them.\n\n3. Appointment Booking (Manager / Support):\n- Ask for preferred date and time first.\n- Call get_available_slot.\n- If slot is available → confirm and call book_slots.\n- If not available → suggest available slots and ask the customer to choose, then call book_slots.\n\nIrrelevant / Out-of-Scope Requests:\n- If the customer asks for unrelated items (e.g., non-ice-cream products or services):\n  Politely clarify that Naturals Ice Cream only handles ice cream products and related services.\n  Offer help with relevant queries.\n\nMisconduct / Call Termination Rules:\nIf the customer:\n- Uses abusive language\n- Makes sexual or inappropriate remarks\n- Is wasting time or not engaging meaningfully\n\nThen:\n- Respond politely once stating the discussion is not appropriate or productive.\n- Inform that you are ending the call.\n- End the interaction.\n\nBehavioral Guardrails:\n- Never guess product details — always use tools.\n- Never ignore complaints — always create a ticket.\n- Stay calm, polite, and solution-focused.\n- Do not engage in arguments or inappropriate discussions.\n\nExample Conversations (English Voice Style):\n\nProduct Query:\nCustomer: Is mango ice cream available?\nNeha: Hmm, one second, let me check that for you.\nNeha: Okay, mango flavor is available, and there’s also a seasonal offer going on.\n\nComplaint / Ticket:\nCustomer: The ice cream was melted when delivered.\nNeha: Oh, I’m really sorry about that. Umm… before I create a ticket, may I have your name please?\nCustomer: Ajay.\nNeha: Okay Ajay, I’ve created a support ticket for you. Our team will contact you shortly.\n\nAdditional Instructions for Ticket Creation:\n\n- Always capture the customer’s name before creating a ticket.\n- Use the name exactly as provided by the user.\n- Summarize the issue clearly in one sentence before creating the ticket.\n- Automatically pass:\n  • customer_name\n  • issue_description\n- Do not ask for phone number.\n- Always confirm after ticket creation.\n\nAppointment Booking:\nCustomer: I want to speak to the manager.\nNeha: Okay, what date and time would you prefer?\nCustomer: Tomorrow evening.\nNeha: Hmm… let me check… okay, 5 PM is available. Should I book that for you?\n\n\nEmail (before book_slot, internal — keep what you say on the call short):\n- When asking: only say you need their name and email, and ask them to spell the email letter by letter. Do not read long meta-instructions aloud (no lecturing about pace or symbols).\n- When confirming aloud: a short line like \"Thanks, let me confirm:\" then spell the local part with clear pauses, then say \"at the rate\" plus the domain in words with \"dot\" (match what they gave, e.g. gmail dot com). Never say the at-sign.\n- Only call the booking tool after they clearly confirm.\n\nExample (spoken): \"Thanks, let me confirm: a n j n e y three four five at the rate gmail dot com. Is that correct?\"\n\n\nAdditional System Instructions for Calendar Booking (Cal.com Integration):\n\n- The calendar booking and availability tools are built-in integrations.\n- Do NOT try to manually map or pass variables like date, time, or name.\n- Always extract date, time, and customer name naturally from conversation.\n\n- Before calling any calendar function:\n  • Ensure date is clearly understood\n  • Ensure time is clearly understood\n  • Ensure customer name is known\n  • If any of these are missing, ask the user politely\n\nExtract the requested date from the user and convert it into YYYY-MM-DD format.\n\nIMPORTANT — The get_current_date tool will always be called first to get the real current date.\nUse the date from that tool's response as 'today'. Never use training data for dates.\n\nRules:\n- \"today\" → exact date returned by get_current_date tool\n- \"tomorrow\" → get_current_date result + 1 day\n- \"Friday\" → next upcoming Friday from get_current_date result\n- NEVER assume or guess the year. Always use what get_current_date returns.\n\nSet:\nstart = requested date in YYYY-MM-DD\nend = next day of start in YYYY-MM-DD\n\nAlways return valid ISO date strings.\n\n\n- Interpret natural language time:\n  • “tomorrow evening” → assume around 5 PM\n  • “morning” → 10 AM\n  • “afternoon” → 2 PM\n  • If unclear, ask a follow-up question\n\n- When checking availability:\n  • Call check availability only after date and time are known\n\n- After get_available_slots returns: if the user already gave a specific clock time and that time appears in the returned slots, do not read out the entire slot list—briefly confirm that time and continue (name/email then book). Only list many slots if their time was missing or not available.\n\n- When booking:\n  • Call booking function only AFTER user confirms\n\n- Always confirm before booking:\n  Example:\n  “Should I go ahead and book that for you?”\n\n- If slot is not available:\n  • Suggest 2 nearby options (e.g., 4 PM or 6 PM)\n  • Ask user to choose\n  • Then proceed to booking\n\n- Always end booking flow with confirmation:\n  “Your appointment has been booked successfully. You will receive a confirmation shortly.”\n\n- Never call booking directly without checking availability first.\n\nNever convert or generate time manually.\nAlways use the exact timestamp returned from the availability tool.\n\nAlways pass name and email inside the attendee object.\nNever pass name or email at the root level.\n\nIrrelevant Request:\nCustomer: Do you have butter chicken?\nNeha: Umm, we only handle ice cream products. Let me know if you need help with that.\n\nAbusive / Inappropriate:\nCustomer: (abusive remark)\nNeha: It seems this conversation is not appropriate or productive. I’ll have to end the call now. Thank you.\n\nIMPORTANT: The customer may want multiple things in one call. After completing any task, always ask if there's anything else.",
+    "nodes": [
+      {
+        "instruction": {
+          "type": "static_text",
+          "text": "Hello this is customer support department, how can I help you today?"
+        },
+        "name": "Welcome Node",
+        "edges": [
+          {
+            "destination_node_id": "node-1774698840567",
+            "id": "edge-1",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User asks about product OR flavor OR ice cream OR available\n"
+            }
+          },
+          {
+            "destination_node_id": "node-1774699770683",
+            "id": "edge-2",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User raises problem OR complaint OR issue OR delivery"
+            }
+          },
+          {
+            "destination_node_id": "node-1774699912789",
+            "id": "edge-1774699553032-6cccwtnzr",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User asks for manager OR appointment OR meeting OR call"
+            }
+          }
+        ],
+        "start_speaker": "agent",
+        "id": "start-node-1774692276701",
+        "type": "conversation",
+        "display_position": {
+          "x": -282,
+          "y": 534
+        }
+      },
+      {
+        "name": "End Call",
+        "id": "end-call-node-1774692276701",
+        "type": "end",
+        "display_position": {
+          "x": 2166,
+          "y": 198
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Politely end the call"
+        }
+      },
+      {
+        "tool_id": "tool-1774698838217",
+        "else_edge": {
+          "destination_node_id": "node-1774879382888",
+          "id": "node-1774698840567-else-edge",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Else"
+          }
+        },
+        "name": "Product Lookup",
+        "edges": [
+          {
+            "destination_node_id": "node-1774879761276",
+            "id": "edge-1774704263308-1f2f0fkwh",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "Give an answer\n\nSure! Naturals Ice Cream is known for its fresh fruit flavors.\n\nSome of our popular ice creams include:\n\n• Tender Coconut\n• Mango\n• Sitaphal\n• Chocolate Almond\n• Strawberry Cream\n\nAll our ice creams are made with real fruit, milk, and sugar — no artificial flavors.\n\nWould you like to know about a specific flavor or check availability near you?\n\n If flavor mismatch or missing, do not use this edge.\n"
+            }
+          }
+        ],
+        "id": "node-1774698840567",
+        "type": "function",
+        "tool_type": "local",
+        "speak_during_execution": false,
+        "display_position": {
+          "x": 246,
+          "y": 294
+        },
+        "wait_for_result": true
+      },
+      {
+        "tool_id": "tool-1774698957030",
+        "else_edge": {
+          "destination_node_id": "node-1774702302668",
+          "id": "node-1774698989384-else-edge",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Else"
+          }
+        },
+        "name": "Create Ticket",
+        "edges": [
+          {
+            "destination_node_id": "node-1774700607617",
+            "id": "edge-1774700644634-s9fh1kk6y",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "Ticket created"
+            }
+          }
+        ],
+        "id": "node-1774698989384",
+        "type": "function",
+        "tool_type": "local",
+        "speak_during_execution": false,
+        "display_position": {
+          "x": 1086,
+          "y": 870
+        },
+        "wait_for_result": true
+      },
+      {
+        "tool_id": "tool-1774971619011",
+        "else_edge": {
+          "id": "node-1774699163166-else-edge",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Else"
+          }
+        },
+        "name": "Get Available Slots",
+        "edges": [
+          {
+            "destination_node_id": "node-1775363147348",
+            "id": "edge-1776100000001-preselected-time-matches-slots",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "After get_available_slots: the user already stated a specific clock time earlier in this call (e.g. 4 PM) AND that time appears among the returned available slots—skip listing all slots aloud; go extract selected_time then map to slot."
+            }
+          },
+          {
+            "destination_node_id": "node-1775362969761",
+            "id": "edge-1774702949996-lrr2yq0yq",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "Give user list of time slots avaialble"
+            }
+          }
+        ],
+        "id": "node-1774699163166",
+        "type": "function",
+        "tool_type": "local",
+        "speak_during_execution": false,
+        "display_position": {
+          "x": 1038,
+          "y": 1254
+        },
+        "wait_for_result": true
+      },
+      {
+        "tool_id": "tool-1774973702770",
+        "else_edge": {
+          "destination_node_id": "node-1775363612729",
+          "id": "node-1774699299561-else-edge",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Else"
+          }
+        },
+        "name": "Book Slot",
+        "edges": [
+          {
+            "destination_node_id": "node-1775363555011",
+            "id": "edge-1774704438124-7ehf42onn",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "If Appointment booked give confirmation."
+            }
+          }
+        ],
+        "id": "node-1774699299561",
+        "type": "function",
+        "tool_type": "local",
+        "speak_during_execution": false,
+        "display_position": {
+          "x": 3150,
+          "y": 1182
+        },
+        "wait_for_result": true
+      },
+      {
+        "name": "Ask Name",
+        "edges": [
+          {
+            "destination_node_id": "node-1774698989384",
+            "id": "edge-1774699770684-h1hr7idl9",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User provides name OR name is already known from earlier in the conversation"
+            }
+          },
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1775405632598-yw3xoest1",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User clearly wants to do something else entirely"
+            }
+          }
+        ],
+        "id": "node-1774699770683",
+        "type": "conversation",
+        "display_position": {
+          "x": 294,
+          "y": 654
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "If you already know the customer's name from earlier in this conversation, do NOT ask again. Instead say something like 'Alright [name], let me raise a ticket for this issue.' and proceed. Only ask for the name if it has not been provided yet in this conversation. If asking, say: 'Oh, I'm really sorry about that… umm, before I create a ticket, may I have your name please?'"
+        }
+      },
+      {
+        "name": "Ask Date & Time",
+        "edges": [
+          {
+            "destination_node_id": "node-1776900000000",
+            "id": "edge-1774699912789-eguvnlw4j",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User provides date"
+            }
+          },
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1775486466596-1uei1m575",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User clearly wants to do something else entirely"
+            }
+          }
+        ],
+        "id": "node-1774699912789",
+        "type": "conversation",
+        "display_position": {
+          "x": -330,
+          "y": 1230
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Sure, what date would you prefer?"
+        }
+      },
+      {
+        "variables": [
+          {
+            "name": "start",
+            "type": "string",
+            "description": "start Date of appointment\n"
+          },
+          {
+            "name": "end",
+            "type": "string",
+            "description": "end date of appointment"
+          }
+        ],
+        "else_edge": {
+          "destination_node_id": "node-1774699912789",
+          "id": "node-1774699962185-else-edge",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Else"
+          }
+        },
+        "name": "Extract Variables",
+        "edges": [
+          {
+            "destination_node_id": "node-1774699163166",
+            "id": "edge-1774699962185-wu2hchhx9",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "Give all available slots now so user can choose from them"
+            }
+          }
+        ],
+        "finetune_transition_examples": [
+          {
+            "transcript": [
+              {
+                "content": "5th April",
+                "role": "user"
+              },
+              {
+                "content": "{ \"start\": \"2026-04-05\", \"end\": \"2026-04-06\" }",
+                "role": "agent"
+              }
+            ],
+            "id": "fe-1775367268742"
+          }
+        ],
+        "id": "node-1774699962185",
+        "type": "extract_dynamic_variables",
+        "display_position": {
+          "x": 654,
+          "y": 1134
+        }
+      },
+      {
+        "name": "Confirmation ",
+        "edges": [
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1775427343082-ml4w8py1b",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "After informing the user, proceed to ask if they need anything else"
+            }
+          }
+        ],
+        "id": "node-1774700607617",
+        "type": "conversation",
+        "display_position": {
+          "x": 1662,
+          "y": 750
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Inform the customer that their support ticket has been created. You MUST include the ticket number or ticket ID from the create_ticket tool response in your message. Say something like: 'Okay {{customer_name}}, I've created support ticket number [ticket_id from response] for you. Please keep this number for your reference. Our team will contact you shortly.' If no ticket number was returned, still confirm the ticket was created."
+        }
+      },
+      {
+        "name": "Conversation",
+        "edges": [
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1775424111242-kqfv9yl0l",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "After informing the user, proceed to ask if they need anything else"
+            }
+          }
+        ],
+        "id": "node-1774702302668",
+        "type": "conversation",
+        "display_position": {
+          "x": 1758,
+          "y": 1062
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Hmm, I'm having trouble creating the ticket right now. Our team will reach out to you."
+        }
+      },
+      {
+        "name": "Conversation",
+        "edges": [
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1775425826829-8qxoru5q6",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "After informing the user, proceed to ask if they need anything else"
+            }
+          }
+        ],
+        "id": "node-1774879382888",
+        "type": "conversation",
+        "display_position": {
+          "x": 750,
+          "y": 414
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Sorry, I don't have information about that particular flavor. Is there another flavor you'd like to ask about?"
+        }
+      },
+      {
+        "name": "Conversation",
+        "edges": [
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1775473235101-4dk9vyqlv",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "After sharing the product info, proceed to ask if they need anything else"
+            }
+          }
+        ],
+        "id": "node-1774879761276",
+        "type": "conversation",
+        "display_position": {
+          "x": 654,
+          "y": -90
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Speak only what product_lookup returned for the exact flavor asked. If flavor is missing or mismatched, say exactly: \"Sorry, I don't have information about that particular flavor.\""
+        }
+      },
+      {
+        "name": "Conversation",
+        "edges": [
+          {
+            "destination_node_id": "node-1774934991043",
+            "id": "edge-1774934968660-h6x91kn1h",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User give name. User gives email letter by letter"
+            }
+          },
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1775497398400-acxmixaoo",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User clearly wants to do something else entirely"
+            }
+          }
+        ],
+        "id": "node-1774934968660",
+        "type": "conversation",
+        "display_position": {
+          "x": 2574,
+          "y": 1350
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Great! Before I book the appointment, may I have your name and email address? Please spell the email letter by letter."
+        }
+      },
+      {
+        "variables": [
+          {
+            "name": "email",
+            "type": "string",
+            "description": "email of the user"
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "description": "Name of user"
+          }
+        ],
+        "else_edge": {
+          "id": "node-1774934991043-else-edge",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Else"
+          }
+        },
+        "name": "Extract Variables",
+        "edges": [
+          {
+            "destination_node_id": "node-1774935034342",
+            "id": "edge-1774934991043-6gmvrokzl",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "When email recieved"
+            }
+          }
+        ],
+        "finetune_transition_examples": [
+          {
+            "transcript": [
+              {
+                "content": "anushka.g@gmail.com",
+                "role": "user"
+              },
+              {
+                "content": "{ \"email\": \"anushka.g@gmail.com\" }",
+                "role": "agent"
+              },
+              {
+                "content": "a n u s h k a at the rate gmail dot com",
+                "role": "user"
+              },
+              {
+                "content": "{ \"email\": \"anushka@gmail.com\" }",
+                "role": "agent"
+              }
+            ],
+            "id": "fe-1775365490446"
+          }
+        ],
+        "id": "node-1774934991043",
+        "type": "extract_dynamic_variables",
+        "display_position": {
+          "x": 2814,
+          "y": 1710
+        }
+      },
+      {
+        "name": "Conversation",
+        "edges": [
+          {
+            "destination_node_id": "node-1774699299561",
+            "id": "edge-1774935034342-anoytngvs",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "If user confirms (yes, yeah, correct, go ahead) → go to book_slot node"
+            }
+          },
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1774935060774-wuttud4z6",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "else\n"
+            }
+          },
+          {
+            "destination_node_id": "node-1774934968660",
+            "id": "edge-1775461717981-0up53bs8e",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User says email or name is wrong"
+            }
+          },
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1775423685457-ne5lswsd4",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User says cancel OR wants to do something else"
+            }
+          }
+        ],
+        "id": "node-1774935034342",
+        "type": "conversation",
+        "display_position": {
+          "x": 3174,
+          "y": 1590
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Confirm booking details before calling book_slot.\n\nTime: {{selected_time}}\nName: {{name}}\n\nFor the email: say something short like \"Thanks, let me confirm:\" then spell the local part clearly, then \"at the rate\" plus the domain with \"dot\" (use their real domain). Do not read {{email}} as one rushed string; do not say the at-sign.\n\nThen ask: Should I book this?"
+        }
+      },
+      {
+        "name": "Conversation",
+        "edges": [
+          {
+            "destination_node_id": "node-1774699962185",
+            "id": "edge-1775319880576-oxskqz68w",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "Convert date"
+            }
+          }
+        ],
+        "id": "node-1775319880576",
+        "type": "conversation",
+        "display_position": {
+          "x": 270,
+          "y": 1254
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "You must convert the user's requested date into YYYY-MM-DD format.\n\nThe get_current_date tool was already called just before this node and returned today's real date.\nUse the 'datetime' value from that tool response as today's date.\nDo NOT use your training knowledge. Do NOT guess. Do NOT use 2024.\n\nUnderstanding relative dates:\n- \"today\" → the date from get_current_date response\n- \"tomorrow\" → that date + 1 day\n- \"next Friday\" / \"Monday\" → calculate forward from that date\n\nRules:\n1. Derive year, month, day entirely from the get_current_date tool result.\n2. Never use a past year.\n3. end = start + 1 day.\n\nReturn ONLY JSON:\n\n{\n \"start\": \"YYYY-MM-DD\",\n \"end\": \"YYYY-MM-DD\"\n}\n\nThis is internal. Do not speak the JSON or dates to the user.\n"
+        }
+      },
+      {
+        "name": "Show Available slots",
+        "edges": [
+          {
+            "destination_node_id": "node-1775363147348",
+            "id": "edge-1775362969761-cw5utl847",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "Give users time he can choose from on that date"
+            }
+          },
+          {
+            "destination_node_id": "node-1774699912789",
+            "id": "edge-1775434224476-i6hlnw85u",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User wants a different date OR none of these work"
+            }
+          },
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1775416797424-so4jqoqmx",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User wants to do something else entirely"
+            }
+          }
+        ],
+        "id": "node-1775362969761",
+        "type": "conversation",
+        "display_position": {
+          "x": 1254,
+          "y": 1758
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "If the user already named a time earlier and that time is in the get_available_slots result: say only a short confirmation (e.g. that time works)—do NOT read the entire list of slots.\n\nOtherwise: Okay, here are the available time slots for that day.\n\nPlease choose a time that works for you.\n\nIf the user selects a time not in the list,\nask them to choose from the provided slots.\nDo NOT call the availability tool again."
+        }
+      },
+      {
+        "variables": [
+          {
+            "name": "selected_time",
+            "type": "string",
+            "description": "Clock time the customer wants on this date (e.g. 4 PM). If they already said it earlier and slots include it, use that time. Otherwise use the time they pick after hearing options.\n"
+          }
+        ],
+        "else_edge": {
+          "id": "node-1775363147348-else-edge",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Else"
+          }
+        },
+        "name": "Extract Variables",
+        "edges": [
+          {
+            "destination_node_id": "node-1775363299525",
+            "id": "edge-1775363147348-z2jwzrnnu",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User provides time → Map Time to Slot"
+            }
+          }
+        ],
+        "id": "node-1775363147348",
+        "type": "extract_dynamic_variables",
+        "display_position": {
+          "x": 1782,
+          "y": 1686
+        }
+      },
+      {
+        "name": "Map time to slot",
+        "edges": [
+          {
+            "destination_node_id": "node-1774934968660",
+            "id": "edge-1775363299525-vty87t9gq",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "If selected_start exists → go to Ask Name node"
+            }
+          }
+        ],
+        "id": "node-1775363299525",
+        "type": "conversation",
+        "display_position": {
+          "x": 2142,
+          "y": 1662
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "You are given a list of available slot timestamps and a user selected time.\nDo not speak anything to the user.\nFind the matching slot and return ONLY in this JSON format:\n\n{\n  \"selected_start\": \"<exact timestamp from list>\"\n}\ndont say the JSON out loud\nRules:\n- Do NOT return plain text\n- Do NOT return only timestamp"
+        }
+      },
+      {
+        "name": "Conversation",
+        "edges": [
+          {
+            "destination_node_id": "node-1775429325981",
+            "id": "edge-1775460982673-7n2s17r43",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "After confirming the booking, proceed to ask if they need anything else"
+            }
+          }
+        ],
+        "id": "node-1775363555011",
+        "type": "conversation",
+        "display_position": {
+          "x": 3510,
+          "y": 966
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Great, your appointment has been booked successfully! You'll receive a confirmation shortly."
+        }
+      },
+      {
+        "name": "Conversation",
+        "edges": [
+          {
+            "destination_node_id": "node-1775362969761",
+            "id": "edge-1775363612729-u0g4fc36e",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "Show available slots again"
+            }
+          }
+        ],
+        "id": "node-1775363612729",
+        "type": "conversation",
+        "display_position": {
+          "x": 3582,
+          "y": 2526
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Hmm, that time just got booked.\n\nLet me check other available slots for you."
+        }
+      },
+      {
+        "name": "Anything Else",
+        "edges": [
+          {
+            "destination_node_id": "node-1774698840567",
+            "id": "edge-1775471690081-er9da3w6a",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User asks about product OR flavor OR ice cream OR menu OR price"
+            }
+          },
+          {
+            "destination_node_id": "node-1774699770683",
+            "id": "edge-1775447343628-uei7772ah",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User raises complaint OR issue OR delivery problem OR refund"
+            }
+          },
+          {
+            "destination_node_id": "node-1774699912789",
+            "id": "edge-1775441784382-qclenjxrv",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User asks for manager OR appointment OR meeting OR book"
+            }
+          },
+          {
+            "destination_node_id": "end-call-node-1774692276701",
+            "id": "edge-1775453006666-l0l1nnmq6",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "User says no OR bye OR goodbye OR nothing OR that's all"
+            }
+          }
+        ],
+        "id": "node-1775429325981",
+        "type": "conversation",
+        "display_position": {
+          "x": 1662,
+          "y": 198
+        },
+        "instruction": {
+          "type": "prompt",
+          "text": "Is there anything else I can help you with today?"
+        }
+      },
+      {
+        "tool_id": "tool-1776900000001",
+        "else_edge": {
+          "destination_node_id": "node-1775319880576",
+          "id": "node-1776900000000-else-edge",
+          "transition_condition": {
+            "type": "prompt",
+            "prompt": "Else"
+          }
+        },
+        "name": "Get Current Date",
+        "edges": [
+          {
+            "destination_node_id": "node-1775319880576",
+            "id": "edge-1776900000002-abcdefghi",
+            "transition_condition": {
+              "type": "prompt",
+              "prompt": "Date fetched — proceed to convert user requested date"
+            }
+          }
+        ],
+        "id": "node-1776900000000",
+        "type": "function",
+        "tool_type": "local",
+        "speak_during_execution": false,
+        "display_position": {
+          "x": -90,
+          "y": 1878
+        },
+        "wait_for_result": true
+      }
+    ],
+    "components": [],
+    "start_node_id": "start-node-1774692276701",
+    "start_speaker": "agent",
+    "tools": [
+      {
+        "headers": {},
+        "parameter_type": "json",
+        "method": "POST",
+        "query_params": {},
+        "description": "Use this tool to answer customer questions about\\nice cream flavors, ingredients, nutrition, calorie count , protein , etc\\npricing policy, or availability.",
+        "type": "custom",
+        "url": " https://maya-unanemic-honey.ngrok-free.dev/api/elevenlabs/product-lookup",
+        "tool_id": "tool-1774698838217",
+        "args_at_root": true,
+        "timeout_ms": 120000,
+        "speak_after_execution": true,
+        "name": "product_lookup",
+        "response_variables": {},
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "The customer's full question about ice cream products, flavors, ingredients, nutrition, pricing, or availability. Do not shorten or summarize."
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "headers": {},
+        "parameter_type": "json",
+        "method": "POST",
+        "query_params": {},
+        "description": "Create a support ticket for complaint/issues needing human follow-up. Send customer_name and issue_description. Infer priority from conversation: High for urgent/severe impact, Medium for normal complaints (default), Low for minor non-urgent issues. Priority must be one of High/Medium/Low and never null. Do not use for product info or general queries.",
+        "type": "custom",
+        "url": " https://maya-unanemic-honey.ngrok-free.dev/api/elevenlabs/create_ticket",
+        "tool_id": "tool-1774698957030",
+        "args_at_root": true,
+        "timeout_ms": 120000,
+        "speak_after_execution": true,
+        "name": "create_ticket",
+        "response_variables": {
+          "phone_number": "+919963213609"
+        },
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "priority": {
+              "type": "string",
+              "description": "Infer from conversation context. Must be one of High, Medium, or Low. If uncertain, use Medium.",
+              "enum": [
+                "High",
+                "Medium",
+                "Low"
+              ]
+            },
+            "issue_description": {
+              "type": "string"
+            },
+            "customer_name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "customer_name",
+            "issue_description",
+            "priority"
+          ]
+        }
+      },
+      {
+        "tool_id": "tool-1774699160782",
+        "event_type_id": 5181780,
+        "cal_api_key": "cal_live_e8ae8d2e987ef667cf28c8f3dbaf8ec6",
+        "timezone": "America/Los_Angeles",
+        "name": "check_availability_cal",
+        "description": "When users ask for availability, check the calendar and provide available slots.",
+        "type": "check_availability_cal"
+      },
+      {
+        "tool_id": "tool-1774699265343",
+        "event_type_id": 5181780,
+        "cal_api_key": "cal_live_e8ae8d2e987ef667cf28c8f3dbaf8ec6",
+        "timezone": "America/Los_Angeles",
+        "name": "book_appointment_cal",
+        "description": "When users ask to book an appointment, book it on the calendar.",
+        "type": "book_appointment_cal"
+      },
+      {
+        "headers": {
+          "Authorization": "Bearer cal_live_17ff33a5b0957ad77b128c9d28662c85",
+          "cal-api-version": "2024-09-04"
+        },
+        "parameter_type": "json",
+        "method": "GET",
+        "query_params": {
+          "start": "{{start}}",
+          "timeZone": "Asia/Kolkata",
+          "end": "{{end}}",
+          "eventTypeId": "4568975"
+        },
+        "description": "Call this tool when the user asks for available appointment times.\n\nExtract the requested date.\n\nSet:\n- startTime = start of the day in ISO 8601 UTC format (YYYY-MM-DDT00:00:00.000Z)\n- endTime = next day in ISO 8601 UTC format\n\nExample:\nIf user says \"April 2\"\nstartTime = 2026-04-02T00:00:00.000Z\nendTime = 2026-04-03T00:00:00.000Z",
+        "type": "custom",
+        "url": "https://api.cal.com/v2/slots",
+        "tool_id": "tool-1774971619011",
+        "args_at_root": false,
+        "timeout_ms": 120000,
+        "speak_after_execution": true,
+        "name": "get_available_slots",
+        "response_variables": {},
+        "speak_during_execution": false
+      },
+      {
+        "headers": {
+          "Authorization ": "Bearer cal_live_17ff33a5b0957ad77b128c9d28662c85",
+          "cal-api-version": "2024-08-13",
+          "Content-Type": "application/json"
+        },
+        "parameter_type": "form",
+        "method": "POST",
+        "query_params": {},
+        "description": "Before book_slot: confirm name and exact slot. When reading the email back, say at the rate plus domain with dot (never @ or a lone at). Call this tool only after the user has selected an exact available time from the availability tools results . \nBefore calling this tool: Confirm the user’s name and email address\nConfirm the selected time matches one of the available slots\nDo not guess or generate a time.\n\nAlways include bookingFieldsResponses.notes.\nIf user does not provide notes, set it to \"N/A\".\nThe \\\"start\\\" value must be an exact timestamp returned by the availability tool.\nAfter a successful booking:\\n- Confirm the meeting\\n- Share the meeting URL with the user\n\nALWAYS generate the request body in this format:\n\n{\n  \"start\": \"<selected_time>\",\n  \"eventTypeId\": 4568975,\n  \"attendee\": {\n    \"name\": \"<user_name>\",\n    \"email\": \"<user_email>\",\n    \"timeZone\": \"Asia/Kolkata\"\n  },\n  \"bookingFieldsResponses\": {\n    \"notes\": \"N/A\"\n  }\n}\n\n",
+        "type": "custom",
+        "url": "https://api.cal.com/v2/bookings",
+        "tool_id": "tool-1774973702770",
+        "args_at_root": true,
+        "timeout_ms": 120000,
+        "speak_after_execution": true,
+        "name": "book_slot",
+        "response_variables": {},
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "required": [
+            "start",
+            "eventTypeId",
+            "attendee",
+            "bookingFieldsResponses"
+          ],
+          "properties": {
+            "start": {
+              "type": "string",
+              "description": "Exact ISO 8601 timestamp from available slots"
+            },
+            "eventTypeId": {
+              "type": "number",
+              "description": "Cal.com event type ID"
+            },
+            "attendee": {
+              "type": "object",
+              "required": [
+                "name",
+                "email",
+                "timeZone"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "timeZone": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string"
+                }
+              }
+            },
+            "bookingFieldsResponses": {
+              "type": "object",
+              "required": [
+                "notes"
+              ],
+              "properties": {
+                "notes": {
+                  "type": "string",
+                  "description": "Additional notes (set default like N/A if not provided)"
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "headers": {},
+        "parameter_type": "json",
+        "method": "GET",
+        "query_params": {},
+        "description": "Call this tool at the start of any booking flow to get the current date in IST (India). The response contains 'datetime' field like '2026-04-22T10:30:00+05:30'. Extract the YYYY-MM-DD part as today's date. Use this as the base for 'today', 'tomorrow', and all relative dates. If this tool fails, use today's date from the system context.\n\nIMPORTANT:\n- Extract date portion (YYYY-MM-DD) from the datetime field\n- Use this as 'today' for all relative date calculations\n- If the tool times out, ask the user for their preferred date instead",
+        "type": "custom",
+        "url": " https://maya-unanemic-honey.ngrok-free.dev/api/elevenlabs/get_current_date",
+        "tool_id": "tool-1776900000001",
+        "args_at_root": false,
+        "timeout_ms": 8000,
+        "speak_after_execution": false,
+        "name": "get_current_date",
+        "response_variables": {},
+        "speak_during_execution": false
+      }
+    ],
+    "model_choice": {
+      "type": "cascading",
+      "model": "gpt-4.1-mini",
+      "high_priority": false
+    },
+    "tool_call_strict_mode": true,
+    "knowledge_base_ids": [],
+    "kb_config": {
+      "top_k": 3,
+      "filter_score": 0.6
+    },
+    "begin_tag_display_position": {
+      "x": -762,
+      "y": 822
+    },
+    "is_published": false,
+    "flex_mode": true,
+    "is_transfer_cf": false
+  }
+}
