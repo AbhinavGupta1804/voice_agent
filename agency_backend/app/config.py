@@ -36,6 +36,17 @@ class Config:
     DB_URL = os.getenv("DB_URL", "postgresql://postgres:postgres@localhost:5432/voice_agent")
     ENV = os.getenv("ENV", "dev")
 
+    # Redis (booking email sessions — required for WhatsApp email collection)
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+    REDIS_MAX_CONNECTIONS = int(os.getenv("REDIS_MAX_CONNECTIONS", "50"))
+
+    # Booking email via WhatsApp (phase 1: fixed test number on Retell web calls)
+    BOOKING_EMAIL_WHATSAPP = os.getenv("BOOKING_EMAIL_WHATSAPP", "919752713547")
+    BOOKING_EMAIL_SESSION_TTL_SECONDS = int(os.getenv("BOOKING_EMAIL_SESSION_TTL_SECONDS", "600"))
+    # Option 2: long-poll inside collect_email_via_whatsapp (seconds)
+    BOOKING_EMAIL_WAIT_TIMEOUT_SECONDS = int(os.getenv("BOOKING_EMAIL_WAIT_TIMEOUT_SECONDS", "90"))
+    BOOKING_EMAIL_POLL_INTERVAL_SECONDS = float(os.getenv("BOOKING_EMAIL_POLL_INTERVAL_SECONDS", "2"))
+
     # Cloudflare R2 Storage
     R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID")
     R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
@@ -117,3 +128,9 @@ class Config:
         cls.validate_twilio_config()
         if not cls.TWILIO_WHATSAPP_NUMBER:
             raise ValueError("Missing TWILIO_WHATSAPP_NUMBER")
+
+    @classmethod
+    def validate_redis_config(cls):
+        """Validate Redis URL is set."""
+        if not cls.REDIS_URL:
+            raise ValueError("Missing REDIS_URL")

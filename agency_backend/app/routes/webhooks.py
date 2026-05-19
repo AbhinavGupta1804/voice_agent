@@ -23,6 +23,7 @@ from ..services.conversation_service import ConversationService
 from ..services.openai_service import OpenAIService
 from ..services.email_service import EmailService
 from ..services.whatsapp_service import WhatsAppService
+from ..services.whatsapp_booking_service import WhatsAppBookingService
 from ..services.twilio_service import TwilioService
 from ..services.ticket_service import TicketService
 from ..utils.webhook_security import verify_hmac_signature
@@ -377,11 +378,38 @@ def register_webhook_routes(app):
             # Normalize the phone number using our utility
             from_number = normalize_phone_number((From or "").replace("whatsapp:", "").strip())
             
-            logger.info(f"[DEBUG] Webhook triggered. From: {from_number}, Body: {raw_body}")
+            logger.info(
+                "[WhatsApp Inbound] /webhook/whatsapp_response from=%s body_len=%d",
+                from_number,
+                len(raw_body),
+            )
 
             if not from_number:
                 logger.error("[DEBUG] Missing from_number")
                 return Response(content="", media_type="application/xml")
+
+            # Booking email collection (Redis) — takes priority over generic AI chat
+            try:
+                booking_result = await WhatsAppBookingService.handle_inbound_email_reply(
+                    from_phone=from_number,
+                    message_body=raw_body,
+                )
+                if booking_result.get("handled"):
+                    reply = booking_result.get("reply_message", "")
+                    if reply:
+                        await WhatsAppService.send_simple_message(from_number, reply)
+                    logger.info(
+                        "[WhatsApp] booking email handled call_id=%s success=%s",
+                        booking_result.get("call_id"),
+                        booking_result.get("success"),
+                    )
+                    return Response(content="", media_type="application/xml")
+            except Exception as booking_exc:
+                logger.error(
+                    "[WhatsApp] booking email handler error: %s",
+                    booking_exc,
+                    exc_info=True,
+                )
 
             # Get or create thread
             try:

@@ -1,16 +1,18 @@
-"""ElevenLabs Custom Tools API endpoints."""
+"""ElevenLabs / Retell Custom Tools API endpoints."""
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Request
 from pydantic import BaseModel, Field
 
 from ..config import Config
 from ..services.rag import get_retriever
 from ..services.ticket_service import TicketService
 from ..services.call_record_service import CallRecordService
+from ..services.whatsapp_booking_service import WhatsAppBookingService
+from ..utils.retell_payload import parse_tool_request
 from ..models.ticket_models import TicketCreate
 
 logger = logging.getLogger(__name__)
@@ -84,6 +86,16 @@ class CurrentDateResponse(BaseModel):
     datetime: str = Field(..., description="Current datetime in ISO 8601 format (IST)")
     date: str = Field(..., description="Current date in YYYY-MM-DD format (IST)")
     timezone: str = Field(..., description="Timezone name")
+
+
+class CollectEmailViaWhatsAppResponse(BaseModel):
+    """Response after send + wait for WhatsApp email (Option 2)."""
+    success: bool
+    status: str
+    call_id: str
+    email: str = ""
+    ready: bool = False
+    message: str = ""
 
 
 def register_elevenlabs_tools_routes(app):
@@ -456,6 +468,68 @@ def register_elevenlabs_tools_routes(app):
             datetime=now_ist.isoformat(),
             date=now_ist.strftime("%Y-%m-%d"),
             timezone="Asia/Kolkata",
+        )
+
+    @router.post("/collect_email_via_whatsapp", response_model=CollectEmailViaWhatsAppResponse)
+    async def collect_email_via_whatsapp(request: Request):
+        """
+        Retell / ElevenLabs tool (Option 2): send WhatsApp + wait for reply on Redis.
+
+        Holds the HTTP request up to BOOKING_EMAIL_WAIT_TIMEOUT_SECONDS (default 90s).
+        Set Retell tool timeout to 120000ms. User does NOT need to say they sent the email.
+        """
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+
+        call_id, args = parse_tool_request(body)
+        if not call_id:
+            call_id = args.get("call_id") or body.get("call_id")
+        if not call_id:
+            logger.error(
+                "[BookingEmail Tool] collect_email: missing call_id keys=%s",
+                list(body.keys()),
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="call_id is required (from Retell call object or request body)",
+            )
+
+        customer_name = (
+            args.get("customer_name") or body.get("customer_name") or ""
+        ).strip()
+        if not customer_name:
+            raise HTTPException(status_code=400, detail="customer_name is required")
+
+        selected_time = (
+            args.get("selected_time") or body.get("selected_time") or ""
+        ).strip() or None
+
+        logger.info(
+            "[BookingEmail Tool] collect_email_via_whatsapp start call_id=%s name=%s",
+            call_id,
+            customer_name,
+        )
+        result = await WhatsAppBookingService.collect_email_via_whatsapp(
+            call_id=call_id,
+            customer_name=customer_name,
+            selected_time=selected_time,
+        )
+        logger.info(
+            "[BookingEmail Tool] collect_email_via_whatsapp done call_id=%s status=%s ready=%s",
+            call_id,
+            result.get("status"),
+            result.get("ready"),
+        )
+
+        return CollectEmailViaWhatsAppResponse(
+            success=bool(result.get("success")),
+            status=result.get("status", "timeout"),
+            call_id=call_id,
+            email=result.get("email") or "",
+            ready=bool(result.get("ready")),
+            message=result.get("message", ""),
         )
 
     app.include_router(router)
