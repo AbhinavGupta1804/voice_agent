@@ -30,7 +30,11 @@ class WhatsAppBookingService:
         selected_time: Optional[str] = None,
         phone: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create Redis session and send WhatsApp asking for email."""
+        """
+        Create PostgreSQL session and send WhatsApp asking for email.
+
+        Returns immediately (non-blocking for Retell).
+        """
         target_phone = cls.resolve_target_phone(phone)
         session = await BookingEmailSessionService.create_session(
             call_id=call_id,
@@ -77,62 +81,11 @@ class WhatsAppBookingService:
             "status": "pending",
             "call_id": call_id,
             "phone": target_phone,
-            "session": session,
-        }
-
-    @classmethod
-    async def collect_email_via_whatsapp(
-        cls,
-        call_id: str,
-        customer_name: str,
-        selected_time: Optional[str] = None,
-        phone: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Option 2: Send WhatsApp, then wait on Redis until user replies (long-poll).
-
-        Retell tool holds this HTTP request open until email arrives or timeout.
-        """
-        send_result = await cls.send_email_request(
-            call_id=call_id,
-            customer_name=customer_name,
-            selected_time=selected_time,
-            phone=phone,
-        )
-        if not send_result.get("success"):
-            return {
-                "success": False,
-                "status": send_result.get("status", "failed"),
-                "call_id": call_id,
-                "email": "",
-                "ready": False,
-                "message": send_result.get("message", "Failed to send WhatsApp."),
-            }
-
-        wait_result = await BookingEmailSessionService.wait_for_email(call_id)
-        email = wait_result.get("email") or ""
-        ready = bool(wait_result.get("ready"))
-
-        if ready and email:
-            return {
-                "success": True,
-                "status": "email_received",
-                "call_id": call_id,
-                "email": email,
-                "ready": True,
-                "message": f"Email received via WhatsApp: {email}",
-            }
-
-        return {
-            "success": False,
-            "status": wait_result.get("status", "timeout"),
-            "call_id": call_id,
-            "email": "",
-            "ready": False,
             "message": (
-                "Did not receive email on WhatsApp in time. "
-                "Ask the customer to check WhatsApp and try again."
+                "WhatsApp message sent. Ask the customer to reply with their email, "
+                "then poll session status or wait for them to say they have sent it."
             ),
+            "session": session,
         }
 
     @classmethod
@@ -198,6 +151,6 @@ class WhatsAppBookingService:
             "email": normalized,
             "reply_message": (
                 f"Thanks! We received your email ({normalized}). "
-                "Please stay on the call — the agent will confirm shortly."
+                "You can continue on the call — say you've sent it."
             ),
         }

@@ -12,7 +12,6 @@ from fastapi.responses import JSONResponse, FileResponse
 
 from .config import Config
 from .db import init_postgres, close_postgres
-from .db.redis_client import init_redis, close_redis, check_redis_health
 from .services.scheduler_service import start_scheduler, stop_scheduler
 from .services.elevenlabs_service import ElevenLabsService
 from .routes import (
@@ -64,13 +63,6 @@ async def lifespan(app: FastAPI):
         # Don't raise - let the server start even if DB fails initially
         # The pool will try to reconnect on first query
 
-    try:
-        await init_redis()
-        logger.info("[Server] Redis initialized successfully")
-    except Exception as e:
-        logger.error(f"[Server] Redis initialization failed: {e}", exc_info=True)
-        logger.error("[Server] Booking email via WhatsApp will not work until Redis is available")
-    
     # Start the follow-up scheduler
     try:
         await start_scheduler()
@@ -91,7 +83,6 @@ async def lifespan(app: FastAPI):
         logger.info("[Server] Shutting down...")
         await stop_scheduler()
         await close_postgres()
-        await close_redis()
         logger.info("[Server] Cleanup complete")
 
 
@@ -210,13 +201,10 @@ async def health_check():
     from .db.postgres import check_pool_health
     
     db_health = await check_pool_health()
-    redis_health = await check_redis_health()
-    healthy = db_health["healthy"] and redis_health["healthy"]
 
     return JSONResponse(content={
-        "status": "healthy" if healthy else "degraded",
+        "status": "healthy" if db_health["healthy"] else "degraded",
         "database": db_health,
-        "redis": redis_health,
         "version": "2.0.0"
     })
 

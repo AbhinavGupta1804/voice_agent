@@ -11,6 +11,7 @@ from ..config import Config
 from ..services.rag import get_retriever
 from ..services.ticket_service import TicketService
 from ..services.call_record_service import CallRecordService
+from ..services.booking_email_session_service import BookingEmailSessionService
 from ..services.whatsapp_booking_service import WhatsAppBookingService
 from ..utils.retell_payload import parse_tool_request
 from ..models.ticket_models import TicketCreate
@@ -88,14 +89,31 @@ class CurrentDateResponse(BaseModel):
     timezone: str = Field(..., description="Timezone name")
 
 
-class CollectEmailViaWhatsAppResponse(BaseModel):
-    """Response after send + wait for WhatsApp email (Option 2)."""
+class SendWhatsAppEmailRequestBody(BaseModel):
+    """Flat or nested body for send_whatsapp_email_request (Retell + ElevenLabs)."""
+    customer_name: str = Field(..., description="Customer name for the booking")
+    selected_time: Optional[str] = Field(None, description="Human-readable slot time")
+    call_id: Optional[str] = Field(None, description="Retell call_id (optional if in call object)")
+
+
+class SendWhatsAppEmailResponse(BaseModel):
+    """Immediate response — does not wait for email."""
     success: bool
     status: str
     call_id: str
+    message: str
+    phone: Optional[str] = None
+
+
+class BookingEmailStatusResponse(BaseModel):
+    """Poll response for Retell get_booking_email_status tool."""
+    call_id: str
+    status: str
     email: str = ""
     ready: bool = False
     message: str = ""
+    customer_name: Optional[str] = None
+    selected_time: Optional[str] = None
 
 
 def register_elevenlabs_tools_routes(app):
@@ -470,13 +488,13 @@ def register_elevenlabs_tools_routes(app):
             timezone="Asia/Kolkata",
         )
 
-    @router.post("/collect_email_via_whatsapp", response_model=CollectEmailViaWhatsAppResponse)
-    async def collect_email_via_whatsapp(request: Request):
+    @router.post("/send_whatsapp_email_request", response_model=SendWhatsAppEmailResponse)
+    async def send_whatsapp_email_request(request: Request):
         """
-        Retell / ElevenLabs tool (Option 2): send WhatsApp + wait for reply on Redis.
+        Retell / ElevenLabs tool: send WhatsApp asking for email (non-blocking).
 
-        Holds the HTTP request up to BOOKING_EMAIL_WAIT_TIMEOUT_SECONDS (default 90s).
-        Set Retell tool timeout to 120000ms. User does NOT need to say they sent the email.
+        Creates a PostgreSQL session keyed by call_id. User replies via WhatsApp;
+        Retell polls GET /session-status/{call_id} or get_booking_email_status.
         """
         try:
             body: Dict[str, Any] = await request.json()
@@ -487,49 +505,58 @@ def register_elevenlabs_tools_routes(app):
         if not call_id:
             call_id = args.get("call_id") or body.get("call_id")
         if not call_id:
-            logger.error(
-                "[BookingEmail Tool] collect_email: missing call_id keys=%s",
-                list(body.keys()),
-            )
+            logger.error("[BookingEmail Tool] send_whatsapp: missing call_id body_keys=%s", list(body.keys()))
             raise HTTPException(
                 status_code=400,
                 detail="call_id is required (from Retell call object or request body)",
             )
 
         customer_name = (
-            args.get("customer_name") or body.get("customer_name") or ""
+            args.get("customer_name")
+            or body.get("customer_name")
+            or ""
         ).strip()
         if not customer_name:
             raise HTTPException(status_code=400, detail="customer_name is required")
 
         selected_time = (
-            args.get("selected_time") or body.get("selected_time") or ""
+            args.get("selected_time")
+            or body.get("selected_time")
+            or ""
         ).strip() or None
 
-        logger.info(
-            "[BookingEmail Tool] collect_email_via_whatsapp start call_id=%s name=%s",
-            call_id,
-            customer_name,
-        )
-        result = await WhatsAppBookingService.collect_email_via_whatsapp(
+        result = await WhatsAppBookingService.send_email_request(
             call_id=call_id,
             customer_name=customer_name,
             selected_time=selected_time,
         )
-        logger.info(
-            "[BookingEmail Tool] collect_email_via_whatsapp done call_id=%s status=%s ready=%s",
-            call_id,
-            result.get("status"),
-            result.get("ready"),
+
+        return SendWhatsAppEmailResponse(
+            success=bool(result.get("success")),
+            status=result.get("status", "pending"),
+            call_id=call_id,
+            message=result.get("message", ""),
+            phone=result.get("phone"),
         )
 
-        return CollectEmailViaWhatsAppResponse(
-            success=bool(result.get("success")),
-            status=result.get("status", "timeout"),
-            call_id=call_id,
-            email=result.get("email") or "",
-            ready=bool(result.get("ready")),
-            message=result.get("message", ""),
+    @router.get("/get_booking_email_status", response_model=BookingEmailStatusResponse)
+    async def get_booking_email_status(call_id: str):
+        """
+        Retell poll tool (fast, non-blocking). Prefer until ready=true.
+
+        Alias of GET /session-status/{call_id} for custom-function GET tools.
+        """
+        if not call_id or not call_id.strip():
+            raise HTTPException(status_code=400, detail="call_id query parameter is required")
+
+        payload = await BookingEmailSessionService.to_status_response(call_id.strip())
+        logger.info(
+            "[BookingEmail Tool] get_booking_email_status call_id=%s status=%s ready=%s email_set=%s",
+            call_id,
+            payload.get("status"),
+            payload.get("ready"),
+            bool(payload.get("email")),
         )
+        return BookingEmailStatusResponse(**payload)
 
     app.include_router(router)

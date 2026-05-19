@@ -371,7 +371,14 @@ def register_webhook_routes(app):
         MessageSid: str = Form(default=None)  # Add MessageSid parameter
     ):
         """
-        Handle incoming WhatsApp messages: store in conversation thread, then reply (confirm/reschedule or generic bot).
+        Single Twilio inbound WhatsApp webhook for the whole product.
+
+        Configure Twilio "When a message comes in" to:
+          POST https://<your-host>/webhook/whatsapp_response
+
+        Order of handling:
+          1. Active booking-email session (voice appointment → WhatsApp email) — PostgreSQL
+          2. Otherwise: conversation thread + CONFIRM/RESCHEDULE keywords or Groq chat bot
         """
         try:
             raw_body = (Body or "").strip()
@@ -388,7 +395,7 @@ def register_webhook_routes(app):
                 logger.error("[DEBUG] Missing from_number")
                 return Response(content="", media_type="application/xml")
 
-            # Booking email collection (Redis) — takes priority over generic AI chat
+            # 1) Booking email (appointment flow) — before general chat
             try:
                 booking_result = await WhatsAppBookingService.handle_inbound_email_reply(
                     from_phone=from_number,
@@ -411,6 +418,7 @@ def register_webhook_routes(app):
                     exc_info=True,
                 )
 
+            # 2) General WhatsApp chat (dashboard thread + Groq)
             # Get or create thread
             try:
                 thread = await ConversationService.get_or_create_thread(from_number, "whatsapp")
