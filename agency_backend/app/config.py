@@ -9,7 +9,16 @@ load_dotenv()
 class Config:
     """Application configuration."""
     
-    # ElevenLabs Configuration
+    # Retell AI Configuration
+    RETELL_API_KEY = os.getenv("RETELL_API_KEY")
+    RETELL_AGENT_ID = os.getenv("RETELL_AGENT_ID")
+    # direct = Retell create-phone-call (import Twilio number into Retell)
+    # sip    = register-phone-call + Twilio SIP bridge (custom telephony)
+    RETELL_INTEGRATION_MODE = os.getenv("RETELL_INTEGRATION_MODE", "direct").lower()
+    # Set false only for local debugging when signature/key mismatch
+    RETELL_WEBHOOK_VERIFY = os.getenv("RETELL_WEBHOOK_VERIFY", "true").lower() in ("1", "true", "yes")
+
+    # Legacy ElevenLabs (optional — only if old webhooks still point here)
     ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
     ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID")
     ELEVENLABS_WEBHOOK_SECRET = os.getenv("ELEVENLABS_WEBHOOK_SECRET", "")
@@ -74,6 +83,8 @@ class Config:
 
     # Follow-up: delay (minutes) before retrying when user didn't pick up original call
     FOLLOW_UP_NO_ANSWER_DELAY_MINUTES = int(os.getenv("FOLLOW_UP_NO_ANSWER_DELAY_MINUTES", "15"))
+    # Set false to disable scheduling and outbound follow-up calls
+    FOLLOW_UP_CALLS_ENABLED = os.getenv("FOLLOW_UP_CALLS_ENABLED", "true").lower() in ("1", "true", "yes")
 
     # Brochure/Media Configuration
     BROCHURE_FILE_PATH = os.getenv("BROCHURE_FILE_PATH", "docs/FileSend.pdf")
@@ -92,8 +103,14 @@ class Config:
         return f"{base_url.rstrip('/')}/static/brochure.pdf"
     
     @classmethod
+    def validate_retell_config(cls):
+        """Validate Retell configuration."""
+        if not cls.RETELL_API_KEY or not cls.RETELL_AGENT_ID:
+            raise ValueError("Missing RETELL_API_KEY or RETELL_AGENT_ID")
+
+    @classmethod
     def validate_elevenlabs_config(cls):
-        """Validate ElevenLabs configuration."""
+        """Validate legacy ElevenLabs configuration."""
         if not cls.ELEVENLABS_API_KEY or not cls.ELEVENLABS_AGENT_ID:
             raise ValueError("Missing ELEVENLABS_API_KEY or ELEVENLABS_AGENT_ID")
     

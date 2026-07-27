@@ -2,8 +2,63 @@
 import hmac
 import hashlib
 import logging
+import re
+import time
 
 logger = logging.getLogger(__name__)
+
+
+def verify_retell_signature(payload: str, signature: str, api_key: str) -> bool:
+    """
+    Verify x-retell-signature header from Retell webhooks.
+
+    Uses Retell's official algorithm (same as retell-sdk):
+    HMAC-SHA256(api_key, raw_body + timestamp_ms)
+    Header format: v=<timestamp_ms>,d=<hex_digest>
+
+  Requires the API key with the **webhook badge** from Retell Dashboard.
+    """
+    try:
+        if not signature or not api_key:
+            return False
+
+        try:
+            from retell.lib.webhook_auth import verify as retell_verify
+
+            return bool(retell_verify(payload, api_key, signature.strip()))
+        except ImportError:
+            pass
+
+        match = re.match(r"v=(\d+),d=(.*)", signature.strip())
+        if not match:
+            logger.warning("[Webhook Security] Invalid Retell signature format: %s", signature[:40])
+            return False
+
+        timestamp_ms = int(match.group(1))
+        received_digest = match.group(2)
+
+        if abs(int(time.time() * 1000) - timestamp_ms) > 5 * 60 * 1000:
+            logger.warning("[Webhook Security] Retell signature timestamp expired")
+            return False
+
+        signed_content = f"{payload}{timestamp_ms}"
+        expected_digest = hmac.new(
+            api_key.encode("utf-8"),
+            signed_content.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+        is_valid = hmac.compare_digest(expected_digest, received_digest)
+        if not is_valid:
+            logger.warning(
+                "[Webhook Security] Invalid Retell signature (body_len=%s). "
+                "Ensure RETELL_API_KEY is the key with the webhook badge in Retell Dashboard.",
+                len(payload),
+            )
+        return is_valid
+    except Exception as exc:
+        logger.error("[Webhook Security] Error verifying Retell signature: %s", exc)
+        return False
 
 
 def verify_hmac_signature(payload: bytes, signature: str, secret: str) -> bool:

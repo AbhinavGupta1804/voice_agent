@@ -4,29 +4,27 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request, Header, Form
+from fastapi import APIRouter, HTTPException, Request, Form
 from fastapi.responses import JSONResponse, Response
 
 from ..config import Config
 from ..handlers.dashboard_ws import dashboard_manager
 from .groq_proxy import generate_groq_response, ChatMessage
 from ..models import (
-    CallCompletePayload, 
-    CallRecordResponse, 
-    ElevenLabsWebhookPayload,
+    CallCompletePayload,
+    CallRecordResponse,
     InsightModel,
-    NotificationPreferences
+    NotificationPreferences,
 )
 from ..services.call_record_service import CallRecordService
 from ..services.follow_up_service import ScheduledFollowUpService
 from ..services.conversation_service import ConversationService
-from ..services.openai_service import OpenAIService
 from ..services.email_service import EmailService
 from ..services.whatsapp_service import WhatsAppService
 from ..services.whatsapp_booking_service import WhatsAppBookingService
 from ..services.twilio_service import TwilioService
 from ..services.ticket_service import TicketService
-from ..utils.webhook_security import verify_hmac_signature
+from ..utils.webhook_security import verify_retell_signature
 from ..utils.phone_utils import normalize_phone_number
 
 logger = logging.getLogger(__name__)
@@ -74,293 +72,269 @@ def _is_valid_phone_number(phone: str) -> bool:
     return True
 
 
+async def _process_retell_call_analyzed(call: dict) -> dict:
+    """Transform Retell call_analyzed payload — same fields as legacy ElevenLabs webhook."""
+    from ..services.post_call_processor import (
+        apply_openai_analysis,
+        build_transcript_from_retell,
+        finalize_call_record,
+        resolve_call_identity,
+        retell_call_timestamp,
+    )
+
+    call_id = call.get("call_id")
+    if not call_id:
+        raise HTTPException(status_code=400, detail="Missing call_id")
+
+    if await CallRecordService.is_call_analyzed_processed(call_id):
+        logger.info("[Retell Webhook] Skipping duplicate call_analyzed for call_id=%s", call_id)
+        return {"status": "already_processed", "call_id": call_id}
+
+    transcript_text = build_transcript_from_retell(call)
+    call_type, client_name, phone_number = await resolve_call_identity(
+        call_id, call, transcript_text=transcript_text
+    )
+
+    call_analysis = call.get("call_analysis") or {}
+    topics = []
+    summary = call_analysis.get("call_summary")
+    if summary:
+        # Topic column is VARCHAR(255) — store a short label, full text goes in summary
+        topics = [str(summary).strip()[:255]]
+
+    custom_data = call_analysis.get("custom_analysis_data") or {}
+    if isinstance(custom_data, dict):
+        title = custom_data.get("call_summary_title") or custom_data.get("title")
+        if title:
+            topics = [str(title)]
+
+    call_successful = call_analysis.get("call_successful")
+    if isinstance(call_successful, bool):
+        conversion_status = call_successful
+    elif isinstance(call_successful, str):
+        conversion_status = call_successful.lower() == "success"
+    else:
+        conversion_status = False
+
+    duration_sec = int((call.get("duration_ms") or 0) / 1000)
+    recording_url = call.get("recording_url") or call.get("scrubbed_recording_url")
+    sentiment = call_analysis.get("user_sentiment")
+    if isinstance(sentiment, str):
+        sentiment = sentiment.lower()
+
+    logger.info(
+        "[Retell Webhook] call_id=%s type=%s client=%s phone=%s duration=%ss recording=%s",
+        call_id,
+        call_type,
+        client_name,
+        phone_number or "(none)",
+        duration_sec,
+        bool(recording_url),
+    )
+
+    payload = CallCompletePayload(
+        call_id=call_id,
+        client_name=client_name,
+        transcript=transcript_text.strip(),
+        insights=InsightModel(topics=topics, duration_sec=duration_sec),
+        conversion_status=conversion_status,
+        sentiment=sentiment,
+        timestamp=retell_call_timestamp(call),
+        recording_url=recording_url,
+        call_type=call_type,
+        phone_number=phone_number,
+        summary=summary,
+    )
+
+    client_name = await apply_openai_analysis(
+        payload,
+        transcript_text=transcript_text,
+        phone_number=phone_number,
+        client_name=client_name,
+        call_type=call_type,
+    )
+    payload.client_name = client_name
+
+    return await finalize_call_record(payload, send_notifications=_send_post_call_notifications)
+
+
+async def _handle_retell_call_started(call: dict) -> None:
+    """Persist inbound caller metadata early so post-call processing has phone/name."""
+    call_id = call.get("call_id")
+    if not call_id:
+        return
+
+    metadata = call.get("metadata") or {}
+    merged = {**metadata}
+    for key in ("retell_llm_dynamic_variables", "collected_dynamic_variables"):
+        block = call.get(key)
+        if isinstance(block, dict):
+            merged.update(block)
+
+    from_number = (call.get("from_number") or merged.get("phone_number") or "").strip()
+    client_name = (
+        merged.get("client_name")
+        or merged.get("customer_name")
+        or "Unknown"
+    )
+    call_type = merged.get("call_type") or (
+        "inbound" if (call.get("direction") or "").lower() == "inbound" else "outbound"
+    )
+
+    if from_number and _is_valid_phone_number(from_number):
+        await CallRecordService.store_call_metadata(
+            call_sid=call_id,
+            client_name=client_name,
+            phone_number=from_number,
+            call_type=call_type,
+        )
+        await CallRecordService.link_conversation_to_call(call_id, call_id)
+        logger.info(
+            "[Retell Webhook] call_started stored metadata call_id=%s phone=%s",
+            call_id,
+            from_number,
+        )
+
+
+async def _handle_retell_call_ended(call: dict) -> None:
+    """Handle call_ended — log disconnect reason; schedule follow-up on no-answer outbound."""
+    call_id = call.get("call_id")
+    disconnection_reason = (call.get("disconnection_reason") or "unknown").lower()
+    duration_ms = call.get("duration_ms") or 0
+    logger.info(
+        "[Retell Webhook] call_ended call_id=%s reason=%s duration_ms=%s",
+        call_id,
+        disconnection_reason,
+        duration_ms,
+    )
+
+    no_answer_reasons = {
+        "dial_no_answer",
+        "dial_busy",
+        "dial_failed",
+        "dial_rejected",
+        "registered_call_timeout",
+        "telephony_provider_permission_denied",
+    }
+
+    if disconnection_reason not in no_answer_reasons:
+        return
+
+    metadata = call.get("metadata") or {}
+    phone_number = (
+        await CallRecordService.get_phone_number_from_conversation(call_id)
+        or metadata.get("phone_number")
+        or call.get("to_number")
+        or ""
+    )
+    client_name = (
+        await CallRecordService.get_client_name_from_conversation(call_id)
+        or metadata.get("client_name")
+        or metadata.get("customer_name")
+        or "Unknown"
+    )
+
+    if not call_id or not phone_number or not _is_valid_phone_number(phone_number):
+        logger.warning("[Retell Webhook] call_ended no-answer but missing phone for call_id=%s", call_id)
+        return
+
+    delay_minutes = getattr(Config, "FOLLOW_UP_NO_ANSWER_DELAY_MINUTES", 15)
+    scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+    try:
+        follow_up_id = await ScheduledFollowUpService.create_follow_up(
+            call_id=call_id,
+            phone_number=phone_number,
+            client_name=client_name,
+            scheduled_at=scheduled_at,
+            context={
+                "reason": "no_answer",
+                "disconnection_reason": disconnection_reason,
+                "original_attempt": "retell_call_ended",
+                "summary": f"Follow-up: user did not pick up ({disconnection_reason})",
+            },
+        )
+        if follow_up_id:
+            logger.info("[Retell Webhook] Scheduled no-answer follow-up id=%s for %s", follow_up_id, call_id)
+    except Exception as exc:
+        logger.error("[Retell Webhook] Failed to schedule no-answer follow-up: %s", exc, exc_info=True)
+
+    await dashboard_manager.broadcast(
+        "call_failed",
+        {
+            "conversation_id": call_id,
+            "failure_reason": disconnection_reason,
+            "metadata": metadata,
+        },
+    )
+
+
 def register_webhook_routes(app):
     """Register webhook routes."""
     router = APIRouter(tags=["Webhooks"])
 
-    @router.post("/webhook/call_complete")
-    async def call_complete_webhook(
-        request: Request,
-        elevenlabs_signature: str = Header(None, alias="ElevenLabs-Signature")
-    ):
+    @router.post("/webhook/retell")
+    @router.get("/webhook/retell")
+    async def retell_webhook(request: Request):
         """
-        Handle ElevenLabs post-call webhooks.
-        
-        Handles both types:
-        - post_call_transcription: Contains transcript, analysis, metadata
-        - post_call_audio: Contains base64-encoded audio data
-        
-        This endpoint verifies the HMAC signature from ElevenLabs before processing.
+        Retell post-call webhook.
+
+        Configure in Retell Dashboard → Agent → Webhook URL:
+          POST {NGROK_URL}/webhook/retell
+
+        Events:
+          - call_started   → store caller metadata
+          - call_ended     → no-answer follow-up scheduling
+          - call_analyzed  → save call, notify, dashboard update
         """
+        if request.method == "GET":
+            return {"status": "ok", "service": "retell-webhook"}
         try:
-            # Handle chunked transfer encoding for audio webhooks
-            if request.headers.get("transfer-encoding", "").lower() == "chunked":
-                chunks = []
-                async for chunk in request.stream():
-                    chunks.append(chunk)
-                raw_body = b''.join(chunks)
-            else:
-                raw_body = await request.body()
-            
-            # Verify HMAC signature if webhook secret is configured
-            if Config.ELEVENLABS_WEBHOOK_SECRET:
-                if not elevenlabs_signature:
+            raw_body = await request.body()
+            raw_text = raw_body.decode("utf-8")
+            signature = request.headers.get("X-Retell-Signature") or request.headers.get("x-retell-signature")
+
+            if Config.RETELL_WEBHOOK_VERIFY and Config.RETELL_API_KEY:
+                if not signature:
                     raise HTTPException(
                         status_code=401,
-                        detail="Missing ElevenLabs-Signature header"
+                        detail="Missing X-Retell-Signature header",
                     )
-                
-                if not verify_hmac_signature(
-                    raw_body,
-                    elevenlabs_signature,
-                    Config.ELEVENLABS_WEBHOOK_SECRET
-                ):
+                if not verify_retell_signature(raw_text, signature, Config.RETELL_API_KEY):
                     raise HTTPException(
                         status_code=401,
-                        detail="Invalid webhook signature"
+                        detail=(
+                            "Invalid Retell webhook signature. "
+                            "Use the API key that has the webhook badge in Retell Dashboard → API Keys, "
+                            "and set it as RETELL_API_KEY in .env."
+                        ),
                     )
-            
-            # Parse and validate payload
-            try:
-                raw_data = json.loads(raw_body)
-                webhook_type = raw_data.get("type", "")
-                
-                logger.info(f"[Webhook] Received webhook type: {webhook_type}")
-                
-                # Handle audio webhook separately
-                if webhook_type == "post_call_audio":
-                    return await _handle_audio_webhook(raw_data)
-                
-                # Handle call initiation failure webhook
-                if webhook_type == "call_initiation_failure":
-                    return await _handle_call_failure_webhook(raw_data)
-                
-                # Parse as ElevenLabs transcription webhook format
-                # elevenlabs_payload = ElevenLabsWebhookPayload.model_validate(raw_data)
-                
-                # Transform ElevenLabs payload to our internal format
-                # Build transcript text from conversation turns
-                transcript_text = ""
-                for turn in raw_data['data']['transcript']:
-                    if turn['message']:
-                        role_label = turn['role'].capitalize()
-                        transcript_text += f"{role_label}: {turn['message']}\n"
-                
-                # Extract client name from stored metadata (set during call initiation)
-                conversation_id = raw_data['data']['conversation_id']
-                metadata = raw_data['data']['metadata']
-                
-                # Get call_type, client_name, and phone_number from stored call metadata FIRST
-                call_type = await CallRecordService.get_call_type_from_conversation(conversation_id)
-                client_name = await CallRecordService.get_client_name_from_conversation(conversation_id) or "Unknown"
-                phone_number = await CallRecordService.get_phone_number_from_conversation(conversation_id) or ""
-                
-                # If call_type is still None, try to infer it from client_name
-                if not call_type:
-                    if client_name == "Customer":
-                        call_type = "inbound"
-                        logger.info(f"[Webhook] Inferred call_type='inbound' from client_name='Customer'")
-                    elif client_name != "Unknown":
-                        # If we have a real client name but no call_type, it's likely outbound
-                        call_type = "outbound"
-                        logger.info(f"[Webhook] Inferred call_type='outbound' from client_name='{client_name}'")
-                
-                # Final fallback: Detect call_type from transcript (agent's first message pattern)
-                # Inbound: "Hey Sir" | Outbound: "Hey {name}"
-                if not call_type and transcript_text.strip():
-                    detected_call_type = OpenAIService.detect_call_type_from_transcript(transcript_text.strip())
-                    if detected_call_type:
-                        call_type = detected_call_type
-                        logger.info(f"[Webhook] Detected call_type='{call_type}' from transcript analysis")
-                
-                logger.info(f"[Webhook] Retrieved metadata - call_type={call_type}, client_name={client_name}, phone_number={phone_number}")
-                
-                # Fallback: Try to get client_name from webhook payload metadata
-                if client_name == "Unknown":
-                    client_name = metadata.get("client_name", "Unknown")
-                
-                # Fallback: Try to get from webhook payload dynamic variables (legacy support)
-                if client_name == "Unknown" and 'conversation_initiation_client_data' in raw_data.get('data', {}):
-                    init_data = raw_data['data']['conversation_initiation_client_data']
-                    if isinstance(init_data, dict):
-                        dynamic_vars = init_data.get('dynamic_variables', {})
-                        if isinstance(dynamic_vars, dict):
-                            client_name = dynamic_vars.get('client_name', 'Unknown')
-                            logger.info(f"[Webhook] Fallback: Extracted client name from payload: {client_name}")
-                
-                if client_name != "Unknown":
-                    logger.info(f"[Webhook] Using client name: {client_name}")
-                else:
-                    logger.warning(f"[Webhook] No client name found for conversation_id={conversation_id}")
-                
-                # Extract topics from summary if available
-                topics = []
-                if raw_data['data']['analysis'] and raw_data['data']['analysis']['call_summary_title']:
-                    topics = [raw_data['data']['analysis']['call_summary_title']]
-                
-                # Determine conversion status (you may want to adjust this logic)
-                conversion_status = (
-                    raw_data['data']['analysis']['call_successful'] == "success"
-                    if raw_data['data']['analysis'] else False
-                )
-                
-                # Extract recording URL from metadata or data
-                recording_url = None
-                
-                if recording_url:
-                    logger.info(f"[Webhook] Found recording URL: {recording_url[:50]}...")
-                else:
-                    logger.info("[Webhook] No recording URL found in payload")
-                
-                # Create our internal payload format
-                payload = CallCompletePayload(
-                    call_id=raw_data['data']['conversation_id'],
-                    client_name=client_name,
-                    transcript=transcript_text.strip(),
-                    insights=InsightModel(
-                        topics=topics,
-                        duration_sec=raw_data['data']['metadata']['call_duration_secs']
-                    ),
-                    conversion_status=conversion_status,
-                    sentiment=None,
-                    timestamp=datetime.fromtimestamp(raw_data['event_timestamp'], tz=timezone.utc),
-                    recording_url=recording_url,
-                    call_type=call_type
-                )
-                
-                # Fallback 2: Try to get phone_number from webhook payload dynamic variables if not already retrieved
-                if not phone_number:
-                    phone_number = metadata.get("phone_number", "")
-                
-                # Fallback 3: Try to get from webhook payload dynamic variables
-                if not phone_number and 'conversation_initiation_client_data' in raw_data.get('data', {}):
-                    init_data = raw_data['data']['conversation_initiation_client_data']
-                    if isinstance(init_data, dict):
-                        dynamic_vars = init_data.get('dynamic_variables', {})
-                        if isinstance(dynamic_vars, dict):
-                            phone_number = dynamic_vars.get('phone_number', phone_number)
-                
-                if phone_number:
-                    logger.info(f"[Webhook] Phone number retrieved: {phone_number}")
-                else:
-                    logger.warning(f"[Webhook] No phone number found in metadata for conversation_id={conversation_id}")
-                
-                # Single analysis using OpenAI (summary, conversion, sentiment, notifications)
-                try:
-                    ai_result = await OpenAIService.analyze_call_structured(
-                        transcript_text.strip(),
-                        phone_number or None,
-                    )
+            elif not Config.RETELL_WEBHOOK_VERIFY:
+                logger.warning("[Retell Webhook] Signature verification disabled (RETELL_WEBHOOK_VERIFY=false)")
 
-                    payload.summary = ai_result.get("summary")
-                    payload.conversion_status = ai_result.get("conversion_status", False)
-                    payload.sentiment = ai_result.get("sentiment", "neutral")
-                    payload.phone_number = phone_number
-                    
-                    # For inbound calls, extract user name from transcript if client_name is still "Customer" or "Unknown"
-                    extracted_user_name = ai_result.get("user_name")
-                    if extracted_user_name and call_type == "inbound":
-                        # Only update if we still have placeholder names
-                        if client_name in ["Customer", "Unknown"]:
-                            client_name = extracted_user_name
-                            payload.client_name = extracted_user_name
-                            logger.info(f"[Webhook] Extracted user name from transcript for inbound call: {extracted_user_name}")
+            data = json.loads(raw_text)
+            event = data.get("event", "")
+            call = data.get("call") or {}
+            call_id = call.get("call_id")
 
-                    # Extract WhatsApp number and validate it
-                    extracted_whatsapp_number = ai_result.get("whatsapp_number")
-                    
-                    # If extracted number is invalid (contains text like "exactly_this_number"),
-                    # fall back to the actual phone number used for the call
-                    if extracted_whatsapp_number and not _is_valid_phone_number(extracted_whatsapp_number):
-                        logger.warning(
-                            f"[Webhook] Invalid WhatsApp number extracted: '{extracted_whatsapp_number}'. "
-                            f"Using call phone number as fallback: {phone_number}"
-                        )
-                        extracted_whatsapp_number = phone_number
-                    
-                    # Notification preferences
-                    payload.notification_preferences = NotificationPreferences(
-                        notify_email=ai_result.get("notify_email", False),
-                        notify_whatsapp=ai_result.get("notify_whatsapp", False),
-                        email_address=ai_result.get("email_address"),
-                        whatsapp_number=extracted_whatsapp_number,
-                    )
+            logger.info("[Retell Webhook] event=%s call_id=%s", event, call_id)
 
-                    logger.info(
-                        "[Webhook] OpenAI structured analysis -> conversion=%s, sentiment=%s, notify_email=%s, notify_whatsapp=%s",
-                        payload.conversion_status,
-                        payload.sentiment,
-                        payload.notification_preferences.notify_email,
-                        payload.notification_preferences.notify_whatsapp,
-                    )
-                    
-                    # Store follow_up_datetime in payload (for calls table backward compatibility)
-                    if ai_result.get("follow_up_datetime"):
-                        try:
-                            follow_up_dt = datetime.fromisoformat(ai_result["follow_up_datetime"].replace('Z', '+00:00'))
-                            payload.follow_up_date = follow_up_dt.date().isoformat()
-                        except Exception:
-                            payload.follow_up_date = None
-                    
-                    # Debug log for follow-up check
-                    logger.info(f"[Webhook DEBUG] ai_result follow_up check: required={ai_result.get('follow_up_required')}, datetime={ai_result.get('follow_up_datetime')}")
-                    
-                    # Schedule follow-up call if customer requested callback
-                    if ai_result.get("follow_up_required") and ai_result.get("follow_up_datetime"):
-                        try:
-                            follow_up_dt = datetime.fromisoformat(ai_result["follow_up_datetime"].replace('Z', '+00:00'))
-                            logger.info(f"[Webhook DEBUG] Attempting to create follow-up: call_id={payload.call_id}, phone={phone_number}, scheduled_at={follow_up_dt}")
-                            await ScheduledFollowUpService.create_follow_up(
-                                call_id=payload.call_id,
-                                phone_number=phone_number,
-                                client_name=client_name,
-                                scheduled_at=follow_up_dt,
-                                context={
-                                    "summary": payload.summary,
-                                    "original_call_date": datetime.now(timezone.utc).isoformat(),
-                                    "call_type": call_type
-                                },
-                                follow_up_first_message=ai_result.get("follow_up_first_message"),
-                            )
-                            logger.info(f"[Webhook] Scheduled follow-up call for {follow_up_dt}")
-                        except Exception as follow_up_error:
-                            logger.error(f"[Webhook] Failed to schedule follow-up: {follow_up_error}")
-                except Exception as ai_error:
-                    logger.warning(f"[Webhook] OpenAI structured analysis failed, using defaults: {ai_error}")
-                
-            except Exception as e:
-                logger.error(f"[Webhook] Failed to parse payload: {e}")
-                raise HTTPException(status_code=400, detail=f"Invalid payload structure: {e}")
-            
-            # Process the webhook
-            logger.info(f"[Webhook] About to upsert call record for call_id={payload.call_id}")
-            try:
-                record = await CallRecordService.upsert_call_record(payload)
-                logger.info(f"[Webhook] Successfully upserted call record, got {len(record)} fields back")
-                response_model = CallRecordResponse(**record)
-            except Exception as upsert_error:
-                logger.error(f"[Webhook] Failed to upsert call record: {upsert_error}", exc_info=True)
-                raise
-            
-            # Send post-call notifications
-            await _send_post_call_notifications(payload, record)
-            
-            # Clean up stored metadata
-            await CallRecordService.cleanup_call_metadata(conversation_id)
-            
-            # Broadcast full record so the dashboard stays in sync
-            await dashboard_manager.broadcast(
-                "call_completed",
-                response_model.model_dump(mode="json"),
-            )
-            
-            return {"status": "success", "call_id": response_model.call_id}
-            
+            if event == "call_started":
+                await _handle_retell_call_started(call)
+                return {"status": "acknowledged"}
+
+            if event == "call_ended":
+                await _handle_retell_call_ended(call)
+                return {"status": "acknowledged"}
+
+            if event == "call_analyzed":
+                return await _process_retell_call_analyzed(call)
+
+            return {"status": "ignored", "event": event}
         except HTTPException:
             raise
-        except Exception as exc:  # pragma: no cover - network/db errors
-            logger.error("[Webhook] call_complete error: %s", exc)
-            raise HTTPException(status_code=500, detail="Failed to process webhook")
+        except Exception as exc:
+            logger.error("[Retell Webhook] error: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to process Retell webhook")
 
     @router.post("/webhook/whatsapp_response")
     async def whatsapp_response_webhook(
@@ -723,156 +697,17 @@ def register_webhook_routes(app):
     app.include_router(router)
 
 
-async def _handle_audio_webhook(raw_data: dict) -> dict:
-    """
-    Handle post_call_audio webhook from ElevenLabs.
-    
-    Audio webhooks contain base64-encoded audio data that we save to disk
-    and then update the corresponding call record with the audio URL.
-    """
-    try:
-        data = raw_data.get("data", {})
-        conversation_id = data.get("conversation_id")
-        full_audio = data.get("full_audio")
-        
-        if not conversation_id:
-            logger.error("[Webhook] Audio webhook missing conversation_id")
-            return {"status": "error", "message": "Missing conversation_id"}
-        
-        if not full_audio:
-            logger.error(f"[Webhook] Audio webhook for {conversation_id} missing full_audio")
-            return {"status": "error", "message": "Missing full_audio"}
-        
-        logger.info(f"[Webhook] Processing audio webhook for conversation_id={conversation_id}")
-        logger.info(f"[Webhook] Audio data size: {len(full_audio)} chars (base64)")
-        
-        # Save the audio file and get the URL
-        recording_url = await CallRecordService.save_audio_recording(conversation_id, full_audio)
-        
-        if recording_url:
-            # Update the call record with the recording URL
-            updated = await CallRecordService.update_recording_url(conversation_id, recording_url)
-            
-            if updated:
-                logger.info(f"[Webhook] Successfully processed audio for {conversation_id}: {recording_url}")
-                
-                # Broadcast update to dashboard
-                await dashboard_manager.broadcast(
-                    "call_audio_ready",
-                    {"call_id": conversation_id, "recording_url": recording_url}
-                )
-                
-                return {"status": "success", "call_id": conversation_id, "recording_url": recording_url}
-            else:
-                logger.warning(f"[Webhook] Audio saved but no call record found for {conversation_id}")
-                return {"status": "partial", "message": "Audio saved but call record not found"}
-        else:
-            logger.error(f"[Webhook] Failed to save audio for {conversation_id}")
-            return {"status": "error", "message": "Failed to save audio"}
-            
-    except Exception as e:
-        logger.error(f"[Webhook] Error processing audio webhook: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
-
-
-async def _handle_call_failure_webhook(raw_data: dict) -> dict:
-    """
-    Handle call_initiation_failure webhook from ElevenLabs.
-
-    Logs the failure for monitoring, notifies the dashboard, and schedules
-    a follow-up call when the user didn't pick up (no answer / busy / etc.).
-    """
-    try:
-        data = raw_data.get("data", {})
-        agent_id = data.get("agent_id")
-        conversation_id = data.get("conversation_id")
-        failure_reason = data.get("failure_reason")
-        metadata = data.get("metadata", {})
-
-        logger.warning(f"[Webhook] Call initiation failed - agent={agent_id}, conversation={conversation_id}")
-        logger.warning(f"[Webhook] Failure reason: {failure_reason}")
-        logger.warning(f"[Webhook] Metadata: {metadata}")
-
-        if not conversation_id:
-            await dashboard_manager.broadcast(
-                "call_failed",
-                {"agent_id": agent_id, "conversation_id": None, "failure_reason": failure_reason, "metadata": metadata}
-            )
-            return {"status": "acknowledged", "failure_reason": failure_reason}
-
-        # Resolve phone_number and client_name for follow-up (no-answer scenario)
-        phone_number = await CallRecordService.get_phone_number_from_conversation(conversation_id)
-        if not phone_number and metadata:
-            phone_number = metadata.get("phone_number") or metadata.get("to") or ""
-        if isinstance(phone_number, str):
-            phone_number = phone_number.strip() or None
-
-        client_name = await CallRecordService.get_client_name_from_conversation(conversation_id)
-        if not client_name and metadata:
-            client_name = metadata.get("client_name") or ""
-        client_name = (client_name or metadata.get("client_name") or "Unknown").strip() or "Unknown"
-
-        # Schedule follow-up when we have a valid phone number (mark as follow-up: user didn't pick up)
-        if conversation_id and phone_number and _is_valid_phone_number(phone_number):
-            delay_minutes = getattr(Config, "FOLLOW_UP_NO_ANSWER_DELAY_MINUTES", 15)
-            scheduled_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
-            try:
-                follow_up_id = await ScheduledFollowUpService.create_follow_up(
-                    call_id=conversation_id,
-                    phone_number=phone_number,
-                    client_name=client_name,
-                    scheduled_at=scheduled_at,
-                    context={
-                        "reason": "no_answer",
-                        "failure_reason": failure_reason,
-                        "original_attempt": "call_initiation_failure",
-                        "summary": f"Follow-up: user did not pick up ({failure_reason or 'unknown'})",
-                    },
-                )
-                if follow_up_id:
-                    logger.info(
-                        f"[Webhook] Scheduled no-answer follow-up id={follow_up_id} for {conversation_id} "
-                        f"at {phone_number}, scheduled_at={scheduled_at.isoformat()}"
-                    )
-                else:
-                    logger.warning(f"[Webhook] Failed to create no-answer follow-up for {conversation_id}")
-            except Exception as follow_up_err:
-                logger.error(f"[Webhook] Error scheduling no-answer follow-up: {follow_up_err}", exc_info=True)
-        else:
-            if not phone_number or not _is_valid_phone_number(phone_number):
-                logger.warning(
-                    f"[Webhook] No valid phone number for no-answer follow-up (conversation_id={conversation_id}). "
-                    "Skipping scheduled follow-up."
-                )
-
-        # Broadcast to dashboard
-        await dashboard_manager.broadcast(
-            "call_failed",
-            {
-                "agent_id": agent_id,
-                "conversation_id": conversation_id,
-                "failure_reason": failure_reason,
-                "metadata": metadata
-            }
-        )
-
-        return {"status": "acknowledged", "failure_reason": failure_reason}
-
-    except Exception as e:
-        logger.error(f"[Webhook] Error processing call failure webhook: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
-
-
 def _build_post_call_summary_body(client_name: str, summary: str, follow_up_date: Optional[str] = None) -> str:
-    """Build the summary + brochure message body for recording in conversation."""
-    follow_up_line = f"\n\n📅 Scheduled Follow-up: {follow_up_date}" if follow_up_date else ""
-    return (
-        f"📞 Call Summary for {client_name}\n\n"
-        f"Hello {client_name}! Thank you for your recent call. Here's a summary of our conversation:\n\n"
-        f"📝 Summary:\n{summary}{follow_up_line}\n\n"
-        f"📎 Attached: Our brochure with more information about our services.\n\n"
-        "---\n_This is an automated message from DevFuzzion Voice Assistant._"
+    """Short post-call summary for WhatsApp, SMS, and conversation thread."""
+    name = (client_name or "there").strip()
+    text = (summary or "No summary available.").strip()
+    body = (
+        f"Hello {name}! Thank you for your recent call. Here's a summary of our conversation:\n"
+        f"{text}"
     )
+    if follow_up_date:
+        body += f"\n\nScheduled follow-up: {follow_up_date}"
+    return body
 
 
 async def _send_post_call_notifications(payload: CallCompletePayload, record: dict) -> None:
@@ -880,6 +715,13 @@ async def _send_post_call_notifications(payload: CallCompletePayload, record: di
     Send brochure + summary after every call via WhatsApp and/or email when contact info is available,
     and record each sent message in the conversation thread for the Chats page.
     """
+    if not await CallRecordService.try_acquire_post_call_notification_lock(payload.call_id):
+        logger.info(
+            "[PostCallNotifications] Skipping duplicate dispatch for call_id=%s",
+            payload.call_id,
+        )
+        return
+
     prefs = payload.notification_preferences or NotificationPreferences(
         notify_email=False, notify_whatsapp=False, email_address=None, whatsapp_number=None,
         email_sent=False, whatsapp_sent=False,
@@ -991,7 +833,9 @@ async def _send_post_call_notifications(payload: CallCompletePayload, record: di
     sms_number = await _get_phone_number_fallback()
     if sms_number:
         try:
-            sms_body = f"Call Summary for {payload.client_name}:\n{summary_text}"
+            sms_body = _build_post_call_summary_body(
+                payload.client_name, summary_text, payload.follow_up_date
+            )
             twilio_service = TwilioService()
             sms_result = await twilio_service.send_sms(sms_number, sms_body)
             
@@ -1063,3 +907,5 @@ async def _send_post_call_notifications(payload: CallCompletePayload, record: di
             logger.info("[PostCallNotifications] Updated record with notification status")
         except Exception as e:
             logger.warning(f"[PostCallNotifications] Failed to update notification status: {e}")
+    else:
+        await CallRecordService.release_post_call_notification_lock(payload.call_id)

@@ -116,9 +116,10 @@ class BookingEmailStatusResponse(BaseModel):
     selected_time: Optional[str] = None
 
 
-def register_elevenlabs_tools_routes(app):
-    """Register ElevenLabs Custom Tools routes."""
-    router = APIRouter(prefix="/api/elevenlabs", tags=["ElevenLabs Tools"])
+def register_elevenlabs_tools_routes(app, prefix: str = "/api/retell"):
+    """Register Retell custom tool routes (legacy /api/elevenlabs prefix supported)."""
+    tag = "Retell Tools" if prefix == "/api/retell" else "ElevenLabs Tools (legacy)"
+    router = APIRouter(prefix=prefix, tags=[tag])
 
     @router.post("/product-lookup", response_model=ProductLookupResponse)
     async def product_lookup(request: ProductLookupRequest):
@@ -207,58 +208,62 @@ def register_elevenlabs_tools_routes(app):
 
     @router.post("/create_ticket", response_model=TicketToolResponse)
     async def create_ticket_tool(
-        request: CreateTicketRequest,
+        request: Request,
         x_conversation_id: Optional[str] = Header(None, alias="X-Conversation-Id"),
     ):
         """
-        ElevenLabs Custom Tool: Create a new complain ticket.
-        If phone_number is empty, resolves it from conversation_id (body or X-Conversation-Id header).
+        Retell custom tool: Create a new complain ticket.
+        Accepts Retell wrapped body {call, args} or flat JSON.
         """
-        # Log immediately so you can confirm which server received the request (local vs Cloud Run)
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+
+        call_id, args = parse_tool_request(body)
+        customer_name = args.get("customer_name") or body.get("customer_name") or ""
+        issue_description = args.get("issue_description") or body.get("issue_description") or ""
+        phone_number = args.get("phone_number") or body.get("phone_number") or ""
+        conversation_id = (
+            args.get("conversation_id")
+            or body.get("conversation_id")
+            or call_id
+            or x_conversation_id
+        )
+        normalized_priority = (args.get("priority") or body.get("priority") or "Medium").strip() or "Medium"
+
         logger.info(
-            "[ElevenLabs Tool] create_ticket ENDPOINT HIT - customer=%s issue_len=%d (this server is creating ticket + pushing to Zoho)",
-            request.customer_name, len(request.issue_description or ""),
+            "[Retell Tool] create_ticket customer=%s issue_len=%d call_id=%s",
+            customer_name,
+            len(issue_description or ""),
+            conversation_id,
         )
         try:
-            conversation_id = request.conversation_id or x_conversation_id
-            phone_number = request.phone_number or ""
-            # Defensive fallback: some callers may send priority as null.
-            normalized_priority = (request.priority or "Medium").strip() or "Medium"
             if not phone_number.strip() and conversation_id:
-                resolved = await CallRecordService.get_phone_number_from_conversation(request.conversation_id)
+                resolved = await CallRecordService.get_phone_number_from_conversation(conversation_id)
                 if resolved:
                     phone_number = resolved
-                    logger.info("[ElevenLabs Tool] create_ticket: resolved phone_number from conversation_id=%s", conversation_id)
-            
-            logger.info(f"[ElevenLabs Tool] Creating ticket for {request.customer_name}: {request.issue_description}, phone=%s", phone_number or "(none)")
-            
+                    logger.info("[Retell Tool] create_ticket resolved phone from call_id=%s", conversation_id)
+
             ticket_data = TicketCreate(
-                customer_name=request.customer_name,
-                issue_description=request.issue_description,
+                customer_name=customer_name,
+                issue_description=issue_description,
                 phone_number=phone_number or None,
-                priority=normalized_priority
+                priority=normalized_priority,
             )
-            
             created_ticket = await TicketService.create_ticket(ticket_data)
-            
+
             if created_ticket:
-                logger.info(
-                    "[ElevenLabs Tool] create_ticket: success, ticket_id=%s, customer=%s",
-                    created_ticket.ticket_id,
-                    request.customer_name,
-                )
                 return TicketToolResponse(
                     success=True,
-                    message=f"Complain ticket bana di hai. Ticket number hai {created_ticket.ticket_id}. Agar isi call mein aur koi complaint ho toh bataiye, main isi ticket mein add kar dungi."
+                    message=f"Ticket raised successfully. Ticket number is {created_ticket.ticket_id}. Our team will reach out to you shortly.",
                 )
-            else:
-                return TicketToolResponse(
-                    success=False,
-                    message="I'm sorry, I encountered an error while trying to create the ticket. Please try again later."
-                )
-                
+            return TicketToolResponse(
+                success=False,
+                message="I'm sorry, I encountered an error while trying to create the ticket. Please try again later.",
+            )
         except Exception as e:
-            logger.error(f"[ElevenLabs Tool] Create ticket error: {e}", exc_info=True)
+            logger.error("[Retell Tool] Create ticket error: %s", e, exc_info=True)
             return TicketToolResponse(success=False, message="System error. Could not create ticket.")
 
     @router.post("/check-ticket-status", response_model=TicketToolResponse)
@@ -328,39 +333,31 @@ def register_elevenlabs_tools_routes(app):
             "Content-Type": "application/json",
         }
 
-    @router.post("/get_available_slot", response_model=GetAvailableSlotResponse)
-    async def get_available_slot(request: GetAvailableSlotRequest):
-        """
-        ElevenLabs Custom Tool: Check available appointment slots for a given date.
-        Customer provides date in IST; we query Cal.com (which uses UTC)
-        and return results converted back to IST.
-        """
+    async def _get_slots_for_date(date_raw: str) -> GetAvailableSlotResponse:
+        """Shared Cal.com slot lookup (IST date string YYYY-MM-DD)."""
         if not Config.CAL_API_KEY:
             return GetAvailableSlotResponse(
                 response="Appointment booking is not configured. Please contact us directly."
             )
-
         try:
-            # Parse the requested date (IST)
             try:
-                req_date = datetime.strptime(request.date.strip(), "%Y-%m-%d").date()
+                req_date = datetime.strptime(date_raw.strip()[:10], "%Y-%m-%d").date()
             except ValueError:
                 return GetAvailableSlotResponse(
                     response="Please provide the date in YYYY-MM-DD format, for example 2026-03-08."
                 )
 
-            # Build UTC time window for the full IST day
             ist_start = datetime(req_date.year, req_date.month, req_date.day, 0, 0, 0, tzinfo=IST)
             ist_end = ist_start + timedelta(days=1)
             utc_start = ist_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
             utc_end = ist_end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
             logger.info(
-                "[ElevenLabs Tool] get_available_slot: date=%s  UTC window=%s → %s",
-                request.date, utc_start, utc_end,
+                "[Retell Tool] get_available_slots: date=%s UTC window=%s → %s",
+                date_raw, utc_start, utc_end,
             )
 
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.get(
                     f"{CAL_BASE_URL}/slots/available",
                     headers=_cal_headers(),
@@ -373,34 +370,60 @@ def register_elevenlabs_tools_routes(app):
                 resp.raise_for_status()
                 data = resp.json()
 
-            # data.data.slots is a dict keyed by date → list of {time: "..."}
             slots_raw = data.get("data", {}).get("slots", {})
             all_slots: list[str] = []
-            for date_key, slot_list in slots_raw.items():
+            for _date_key, slot_list in slots_raw.items():
                 for s in slot_list:
                     utc_time_str = s.get("time", "")
                     if utc_time_str:
-                        # Parse UTC time and convert to IST
                         utc_dt = datetime.fromisoformat(utc_time_str.replace("Z", "+00:00"))
                         ist_dt = utc_dt.astimezone(IST)
                         all_slots.append(ist_dt.strftime("%I:%M %p"))
 
             if not all_slots:
                 return GetAvailableSlotResponse(
-                    response=f"{req_date.strftime('%d %B')} ko koi slot available nahi hai. Koi aur date try karein?"
+                    response=f"No slots on {req_date.strftime('%d %B')}. Please try another date."
                 )
 
             slots_text = ", ".join(all_slots)
             return GetAvailableSlotResponse(
-                response=f"{req_date.strftime('%d %B')} ko yeh slots available hain: {slots_text}. Kaunsa time book karoon?"
+                response=f"On {req_date.strftime('%d %B')} these times are open: {slots_text}. Which time works for you?"
             )
 
         except httpx.HTTPStatusError as e:
-            logger.error("[ElevenLabs Tool] Cal.com API error: %s %s", e.response.status_code, e.response.text)
-            return GetAvailableSlotResponse(response="Slot check karne mein error aa raha hai. Please thodi der baad try karein.")
+            logger.error("[Retell Tool] Cal.com slots error: %s %s", e.response.status_code, e.response.text)
+            return GetAvailableSlotResponse(response="Could not check slots right now. Please try again in a moment.")
         except Exception as e:
-            logger.error("[ElevenLabs Tool] get_available_slot error: %s", e, exc_info=True)
-            return GetAvailableSlotResponse(response="System error. Slot check nahi ho paaya.")
+            logger.error("[Retell Tool] get_available_slots error: %s", e, exc_info=True)
+            return GetAvailableSlotResponse(response="Could not check slots. Please try again.")
+
+    @router.post("/get_available_slot", response_model=GetAvailableSlotResponse)
+    async def get_available_slot(request: GetAvailableSlotRequest):
+        """
+        ElevenLabs Custom Tool: Check available appointment slots for a given date.
+        Customer provides date in IST; we query Cal.com (which uses UTC)
+        and return results converted back to IST.
+        """
+        return await _get_slots_for_date(request.date)
+
+    @router.post("/get_available_slots", response_model=GetAvailableSlotResponse)
+    async def get_available_slots_retell(request: Request):
+        """Retell tool alias — accepts {args: {date}} or {start} from flow variables."""
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+        _, args = parse_tool_request(body)
+        date = (
+            args.get("date")
+            or args.get("start")
+            or body.get("date")
+            or body.get("start")
+            or ""
+        )
+        if not date:
+            return GetAvailableSlotResponse(response="Which date would you like to check?")
+        return await _get_slots_for_date(str(date))
 
     @router.post("/book_slots", response_model=BookSlotResponse)
     async def book_slots(request: BookSlotRequest):
@@ -420,7 +443,7 @@ def register_elevenlabs_tools_routes(app):
                 ist_dt = datetime.fromisoformat(request.start_time).replace(tzinfo=IST)
             except ValueError:
                 return BookSlotResponse(
-                    response="Time format galat hai. Please YYYY-MM-DDTHH:MM:SS format mein dein."
+                    response="I couldn't read that time format. Please provide it as YYYY-MM-DDTHH:MM:SS."
                 )
 
             utc_dt = ist_dt.astimezone(timezone.utc)
@@ -451,7 +474,7 @@ def register_elevenlabs_tools_routes(app):
                 "metadata": {},
             }
 
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=8.0) as client:
                 resp = await client.post(
                     f"{CAL_BASE_URL}/bookings",
                     headers=_cal_headers(Config.CAL_BOOK_API_VERSION),
@@ -465,21 +488,46 @@ def register_elevenlabs_tools_routes(app):
 
             logger.info("[ElevenLabs Tool] book_slots: success, uid=%s", booking_id)
             return BookSlotResponse(
-                response=f"Appointment book ho gayi hai {ist_display} IST ke liye. Booking reference: {booking_id}."
+                response=f"Your appointment is booked for {ist_display}. Reference: {booking_id}."
             )
 
         except httpx.HTTPStatusError as e:
             logger.error("[ElevenLabs Tool] Cal.com booking error: %s %s", e.response.status_code, e.response.text)
-            return BookSlotResponse(response="Booking karne mein error aa raha hai. Please thodi der baad try karein.")
+            return BookSlotResponse(response="Could not complete booking. Please try another time.")
         except Exception as e:
             logger.error("[ElevenLabs Tool] book_slots error: %s", e, exc_info=True)
-            return BookSlotResponse(response="System error. Booking nahi ho paayi.")
+            return BookSlotResponse(response="Booking failed. Please try again.")
+
+    @router.post("/book_slot", response_model=BookSlotResponse)
+    async def book_slot_retell(request: Request):
+        """Retell tool alias — accepts nested attendee + start from conversation flow."""
+        try:
+            body: Dict[str, Any] = await request.json()
+        except Exception:
+            body = {}
+        _, args = parse_tool_request(body)
+        merged = {**body, **args}
+        attendee = merged.get("attendee") if isinstance(merged.get("attendee"), dict) else {}
+        start_time = merged.get("start") or merged.get("start_time") or ""
+        name = attendee.get("name") or merged.get("customer_name") or merged.get("name") or ""
+        email = attendee.get("email") or merged.get("email") or "guest@naturalsicecream.in"
+        tz = attendee.get("timeZone") or attendee.get("timezone") or "Asia/Kolkata"
+        if not start_time or not name:
+            return BookSlotResponse(response="I still need the appointment time and your name to book.")
+        return await book_slots(
+            BookSlotRequest(
+                start_time=start_time,
+                name=name,
+                email=email,
+                timeZone=tz,
+            )
+        )
 
     @router.get("/get_current_date", response_model=CurrentDateResponse)
     async def get_current_date():
         """
-        ElevenLabs Custom Tool: Fetch current date/time in IST.
-        Useful for converting relative dates like "today" or "tomorrow".
+        Legacy tool — prefer Retell built-in date/time (timezone Asia/Calcutta).
+        Kept for older agent versions only.
         """
         now_ist = datetime.now(IST)
         return CurrentDateResponse(

@@ -397,20 +397,21 @@ class CallRecordService:
                         if count == 0:
                             logger.error(f"[CallRecord] CRITICAL: Insert appeared to succeed but record not found!")
                         
-                        # Handle topics
+                        # Handle topics (DB column topic is VARCHAR(255))
                         topics = record["insights"].get("topics", [])
                         if topics:
-                            # Delete existing topics
                             await conn.execute(
                                 "DELETE FROM call_topics WHERE call_id = $1",
                                 record["call_id"]
                             )
-                            # Insert new topics
                             for topic in topics:
+                                topic_text = str(topic or "").strip()[:255]
+                                if not topic_text:
+                                    continue
                                 await conn.execute(
                                     "INSERT INTO call_topics (call_id, topic) VALUES ($1, $2) ON CONFLICT DO NOTHING",
                                     record["call_id"],
-                                    topic
+                                    topic_text,
                                 )
                             logger.info(f"[CallRecord] Inserted {len(topics)} topics for call_id={record['call_id']}")
                         
@@ -561,6 +562,96 @@ class CallRecordService:
         except asyncpg.PostgresError as exc:
             logger.error(f"[PostgreSQL] Fetch call failed for call_id={call_id}: {exc}")
             raise
+
+    @staticmethod
+    async def try_acquire_post_call_notification_lock(call_id: str) -> bool:
+        """
+        Atomically claim post-call notification dispatch for this call_id.
+
+        Returns True only for the first caller; prevents duplicate WhatsApp/SMS
+        when Retell retries call_analyzed webhooks.
+        """
+        pool = await get_db_pool()
+        try:
+            async with pool.acquire() as conn:
+                async with conn.transaction():
+                    await conn.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+                        f"post_call_notify:{call_id}",
+                    )
+                    row = await conn.fetchrow(
+                        """
+                        SELECT whatsapp_sent FROM notification_preferences
+                        WHERE call_id = $1
+                        FOR UPDATE
+                        """,
+                        call_id,
+                    )
+                    if row and row["whatsapp_sent"]:
+                        logger.info(
+                            "[CallRecord] Post-call notifications already sent for call_id=%s",
+                            call_id,
+                        )
+                        return False
+
+                    if row:
+                        await conn.execute(
+                            """
+                            UPDATE notification_preferences
+                            SET whatsapp_sent = TRUE
+                            WHERE call_id = $1
+                            """,
+                            call_id,
+                        )
+                    else:
+                        await conn.execute(
+                            """
+                            INSERT INTO notification_preferences (
+                                call_id, notify_email, notify_whatsapp,
+                                email_sent, whatsapp_sent
+                            ) VALUES ($1, FALSE, FALSE, FALSE, TRUE)
+                            """,
+                            call_id,
+                        )
+                    return True
+        except asyncpg.PostgresError as exc:
+            logger.error(
+                "[CallRecord] Notification lock failed for call_id=%s: %s",
+                call_id,
+                exc,
+            )
+            return False
+
+    @staticmethod
+    async def release_post_call_notification_lock(call_id: str) -> None:
+        """Allow a retry if notification dispatch was claimed but nothing was sent."""
+        pool = await get_db_pool()
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE notification_preferences
+                    SET whatsapp_sent = FALSE
+                    WHERE call_id = $1 AND COALESCE(email_sent, FALSE) = FALSE
+                    """,
+                    call_id,
+                )
+        except asyncpg.PostgresError as exc:
+            logger.warning(
+                "[CallRecord] Failed to release notification lock for call_id=%s: %s",
+                call_id,
+                exc,
+            )
+
+    @staticmethod
+    async def is_call_analyzed_processed(call_id: str) -> bool:
+        """True if this call was already saved from a prior call_analyzed webhook."""
+        existing = await CallRecordService.fetch_call(call_id)
+        if not existing:
+            return False
+        has_transcript = bool((existing.get("transcript") or "").strip())
+        has_summary = bool((existing.get("summary") or "").strip())
+        return has_transcript and has_summary
 
     @staticmethod
     async def get_summary() -> Dict:

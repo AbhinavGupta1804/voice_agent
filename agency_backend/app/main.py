@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from .config import Config
 from .db import init_postgres, close_postgres
 from .services.scheduler_service import start_scheduler, stop_scheduler
-from .services.elevenlabs_service import ElevenLabsService
+from .services.follow_up_service import ScheduledFollowUpService
 from .routes import (
     register_outbound_routes,
     register_webhook_routes,
@@ -63,19 +63,28 @@ async def lifespan(app: FastAPI):
         # Don't raise - let the server start even if DB fails initially
         # The pool will try to reconnect on first query
 
-    # Start the follow-up scheduler
+    # Start the follow-up scheduler (or cancel queue when disabled)
     try:
+        if not Config.FOLLOW_UP_CALLS_ENABLED:
+            cancelled = await ScheduledFollowUpService.cancel_all_active(
+                reason="FOLLOW_UP_CALLS_ENABLED=false"
+            )
+            logger.info(
+                "[Server] Follow-up calls disabled; cancelled %s queued follow-up(s)",
+                cancelled,
+            )
         await start_scheduler()
-        logger.info("[Server] Follow-up scheduler started successfully")
+        if Config.FOLLOW_UP_CALLS_ENABLED:
+            logger.info("[Server] Follow-up scheduler started successfully")
     except Exception as e:
         logger.error(f"[Server] Scheduler initialization failed: {e}", exc_info=True)
     
-    # Pre-fetch ElevenLabs signed URL so the first call is instant
+    # Validate Retell config on startup
     try:
-        await ElevenLabsService.warmup()
-        logger.info("[Server] ElevenLabs signed URL pre-fetched")
+        Config.validate_retell_config()
+        logger.info("[Server] Retell configuration validated")
     except Exception as e:
-        logger.warning(f"[Server] ElevenLabs warmup failed (will fetch on first call): {e}")
+        logger.warning(f"[Server] Retell config missing (calls will fail until set): {e}")
     
     try:
         yield
@@ -88,9 +97,9 @@ async def lifespan(app: FastAPI):
 
 # Initialize FastAPI application
 app = FastAPI(
-    title="Twilio-ElevenLabs Voice Assistant",
-    description="Connect Twilio phone calls to ElevenLabs Conversational AI",
-    version="2.0.0",
+    title="Twilio-Retell Voice Assistant",
+    description="Connect Twilio phone calls to Retell Conversational AI",
+    version="3.0.0",
     lifespan=lifespan
 )
 
@@ -112,55 +121,48 @@ async def root():
     return JSONResponse(content={
         "message": "Server is running",
         "version": "2.0.0",
-        "service": "DevFuzzion ElevenLabs-Twilio Integration"
+        "service": "Naturals Retell-Twilio Integration"
     })
 
-@app.post("/elevenlabs-init")
-@app.get("/elevenlabs-init")
-async def elevenlabs_init(request: Request):
-    """
-    ElevenLabs conversation initiation webhook: return dynamic_variables (e.g. phone_number).
-    Configure this URL in ElevenLabs agent as 'Conversation initiation URL' or dynamic variables source.
-    Accepts POST (JSON body) or GET (query params). Tries multiple keys for caller phone.
-    """
-    data = {}
-    if request.method == "POST":
-        try:
-            data = await request.json()
-        except Exception:
-            data = {}
-    else:
-        data = dict(request.query_params())
+# @app.post("/retell-dynamic-variables")
+# @app.get("/retell-dynamic-variables")
+# async def retell_dynamic_variables(request: Request):
+#     """
+#     Optional inbound webhook for Retell dynamic variables.
+#     Retell can also receive variables via retell_llm_dynamic_variables at call creation.
+#     """
+#     data = {}
+#     if request.method == "POST":
+#         try:
+#             data = await request.json()
+#         except Exception:
+#             data = {}
+#     else:
+#         data = dict(request.query_params())
 
-    # Try common keys ElevenLabs / telephony might send (inbound call)
-    phone_number = (
-        data.get("phone_number")
-        or data.get("caller_id")
-        or data.get("from")
-        or data.get("caller")
-        or data.get("callerPhoneNumber")
-        or data.get("To")
-        or ""
-    )
-    if isinstance(phone_number, str):
-        phone_number = phone_number.strip()
-    else:
-        phone_number = str(phone_number or "")
+#     phone_number = (
+#         data.get("phone_number")
+#         or data.get("from_number")
+#         or data.get("from")
+#         or data.get("caller_id")
+#         or ""
+#     )
+#     customer_name = data.get("customer_name") or data.get("client_name") or ""
 
-    logger.info(
-        "[ElevenLabs Init] method=%s, phone_number=%s, payload_keys=%s",
-        request.method,
-        phone_number or "(empty)",
-        list(data.keys()),
-    )
+#     return {
+#         "retell_llm_dynamic_variables": {
+#             "phone_number": str(phone_number or ""),
+#             "customer_name": str(customer_name or ""),
+#             "client_name": str(customer_name or ""),
+#         }
+#     }
 
-    # Always return phone_number so tools don't fail with "Missing required dynamic variables"
-    return {
-        "type": "conversation_initiation_client_data",
-        "dynamic_variables": {
-            "phone_number": phone_number or ""
-        }
-    }
+
+# @app.post("/elevenlabs-init")
+# @app.get("/elevenlabs-init")
+# async def elevenlabs_init(request: Request):
+#     """Legacy alias — redirects to Retell dynamic variables shape."""
+#     return await retell_dynamic_variables(request)
     
 @app.get("/static/brochure.pdf")
 async def get_brochure():
@@ -187,11 +189,12 @@ async def get_brochure():
 async def debug_config():
     """Debug endpoint to check configuration (REMOVE IN PRODUCTION)."""
     return JSONResponse(content={
-        "webhook_secret_configured": bool(Config.ELEVENLABS_WEBHOOK_SECRET),
-        "webhook_secret_length": len(Config.ELEVENLABS_WEBHOOK_SECRET) if Config.ELEVENLABS_WEBHOOK_SECRET else 0,
-        "webhook_secret_preview": Config.ELEVENLABS_WEBHOOK_SECRET[:8] + "..." if Config.ELEVENLABS_WEBHOOK_SECRET else "Not set",
+        "retell_configured": bool(Config.RETELL_API_KEY and Config.RETELL_AGENT_ID),
+        "retell_integration_mode": Config.RETELL_INTEGRATION_MODE,
+        "twilio_configured": bool(Config.TWILIO_PHONE_NUMBER),
+        "ngrok_url": Config.NGROK_URL or "Not set",
         "db_url_configured": bool(Config.DB_URL),
-        "db_url_preview": Config.DB_URL.split("@")[-1] if Config.DB_URL else "Not set"
+        "db_url_preview": Config.DB_URL.split("@")[-1] if Config.DB_URL else "Not set",
     })
 
 
@@ -280,7 +283,8 @@ register_dashboard_routes(app)
 register_webhook_routes(app)
 register_analytics_routes(app)
 register_groq_proxy_routes(app)
-register_elevenlabs_tools_routes(app)
+register_elevenlabs_tools_routes(app, prefix="/api/retell")
+register_elevenlabs_tools_routes(app, prefix="/api/elevenlabs")
 register_booking_email_routes(app)
 app.include_router(tickets_router)
 

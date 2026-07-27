@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 
 from ..db.postgres import acquire_connection
+from ..config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,9 @@ class ScheduledFollowUpService:
         Returns:
             follow_up_id if successful, None otherwise
         """
+        if not Config.FOLLOW_UP_CALLS_ENABLED:
+            logger.info("[FollowUp] Skipping create (FOLLOW_UP_CALLS_ENABLED=false) call_id=%s", call_id)
+            return None
         try:
             async with acquire_connection() as conn:
                 import json
@@ -265,3 +269,25 @@ class ScheduledFollowUpService:
         except asyncpg.PostgresError as exc:
             logger.error(f"[FollowUp] Failed to mark not_picked for id={follow_up_id}: {exc}")
             return False
+
+    @staticmethod
+    async def cancel_all_active(reason: str = "disabled by admin") -> int:
+        """Cancel all pending/processing follow-ups. Returns number of rows updated."""
+        try:
+            async with acquire_connection() as conn:
+                result = await conn.execute(
+                    """
+                    UPDATE scheduled_follow_ups
+                    SET status = 'cancelled',
+                        last_error = $1,
+                        executed_at = NOW()
+                    WHERE status IN ('pending', 'processing')
+                    """,
+                    reason,
+                )
+                count = int(result.split()[-1]) if result else 0
+                logger.info("[FollowUp] Cancelled %s active follow-up(s)", count)
+                return count
+        except asyncpg.PostgresError as exc:
+            logger.error("[FollowUp] Failed to cancel active follow-ups: %s", exc)
+            return 0

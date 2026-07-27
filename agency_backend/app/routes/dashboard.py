@@ -26,6 +26,7 @@ from ..services.call_record_service import CallRecordService
 from ..services.follow_up_service import ScheduledFollowUpService
 from ..services.conversation_service import ConversationService
 from ..services.twilio_service import TwilioService
+from ..services.retell_service import RetellService
 from ..services.whatsapp_service import WhatsAppService
 from ..services.email_service import EmailService
 from ..utils.csv_processor import CSVProcessor
@@ -199,30 +200,24 @@ def register_dashboard_routes(app):
             raise HTTPException(status_code=400, detail="Client name is required")
 
         try:
-            base_url = Config.NGROK_URL or f"https://{request.headers.get('host', 'localhost')}"
-            twiml_url = f"{base_url}/outbound-call-twiml"
-            params = {
-                "client_name": request_data.client_name,
-                "phone_number": request_data.number,
-            }
-            twiml_url_with_params = f"{twiml_url}?{urlencode(params)}"
-
-            call_info = await twilio_service.initiate_call(
+            call_info = await RetellService.initiate_outbound_call(
                 to_number=request_data.number,
-                twiml_url=twiml_url_with_params,
+                client_name=request_data.client_name,
             )
 
-            # Store client name for later retrieval in webhook
-            call_sid = call_info.get("call_sid")
-            await CallRecordService.store_call_metadata(
-                call_sid=call_sid,
-                client_name=request_data.client_name,
-                phone_number=request_data.number,
-                call_type="outbound"
-            )
+            call_id = call_info.get("call_id")
+            if call_id:
+                await CallRecordService.store_call_metadata(
+                    call_sid=call_id,
+                    client_name=request_data.client_name,
+                    phone_number=request_data.number,
+                    call_type="outbound",
+                )
+                await CallRecordService.link_conversation_to_call(call_id, call_id)
 
             payload = {
-                "call_sid": call_info.get("call_sid"),
+                "call_sid": call_info.get("call_sid") or call_id,
+                "call_id": call_id,
                 "client_name": request_data.client_name,
                 "phone_number": request_data.number,
                 "status": call_info.get("status"),
@@ -233,7 +228,8 @@ def register_dashboard_routes(app):
                 content={
                     "success": True,
                     "message": "Call initiated",
-                    "callSid": call_info.get("call_sid"),
+                    "callSid": call_info.get("call_sid") or call_id,
+                    "callId": call_id,
                     "clientName": request_data.client_name,
                     "phoneNumber": request_data.number,
                 }
@@ -251,29 +247,14 @@ def register_dashboard_routes(app):
             raise HTTPException(status_code=400, detail="Recipients list is required")
 
         try:
-            base_url = Config.NGROK_URL or f"https://{request.headers.get('host', 'localhost')}"
-            twiml_base_url = f"{base_url}/outbound-call-twiml"
+            call_requests = [
+                {"to_number": recipient.number, "client_name": recipient.client_name}
+                for recipient in request_data.recipients
+            ]
 
-            # Prepare call requests for all recipients
-            call_requests = []
-            for recipient in request_data.recipients:
-                params = {
-                    "client_name": recipient.client_name,
-                    "phone_number": recipient.number
-                }
-                twiml_url = f"{twiml_base_url}?{urlencode(params)}"
+            logger.info("[Bulk Call] Initiating %s calls sequentially via Retell", len(call_requests))
+            results = await RetellService.initiate_sequential_calls(call_requests)
 
-                call_requests.append({
-                    "to_number": recipient.number,
-                    "twiml_url": twiml_url,
-                    "client_name": recipient.client_name
-                })
-
-            # Initiate all calls sequentially
-            logger.info(f"[Bulk Call] Initiating {len(call_requests)} calls sequentially")
-            results = await twilio_service.initiate_sequential_calls(call_requests)
-
-            # Process results and broadcast to dashboard
             call_results: List[CallResult] = []
             successful = 0
             failed = 0
@@ -281,30 +262,32 @@ def register_dashboard_routes(app):
             for result in results:
                 if result["success"]:
                     successful += 1
-                    call_sid = result["call_sid"]
-                    
-                    # Store metadata for each successful call
-                    await CallRecordService.store_call_metadata(
-                        call_sid=call_sid,
-                        client_name=result["client_name"],
-                        phone_number=result["to_number"],
-                        call_type="outbound"
-                    )
-                    
-                    # Broadcast to dashboard
+                    call_id = result.get("call_id")
+                    call_sid = result.get("call_sid") or call_id
+
+                    if call_id:
+                        await CallRecordService.store_call_metadata(
+                            call_sid=call_id,
+                            client_name=result["client_name"],
+                            phone_number=result["to_number"],
+                            call_type="outbound",
+                        )
+                        await CallRecordService.link_conversation_to_call(call_id, call_id)
+
                     payload = {
                         "call_sid": call_sid,
+                        "call_id": call_id,
                         "client_name": result["client_name"],
                         "phone_number": result["to_number"],
-                        "status": result["status"],
+                        "status": result.get("status"),
                     }
                     await dashboard_manager.broadcast("call_in_progress", payload)
-                    
+
                     call_results.append(CallResult(
                         success=True,
                         call_sid=call_sid,
                         client_name=result["client_name"],
-                        phone_number=result["to_number"]
+                        phone_number=result["to_number"],
                     ))
                 else:
                     failed += 1
@@ -393,60 +376,47 @@ def register_dashboard_routes(app):
             if validation_errors:
                 logger.warning(f"[CSV Upload] {len(validation_errors)} validation errors: {validation_errors[:3]}")
             
-            # Prepare call requests
-            base_url = Config.NGROK_URL or f"https://{request.headers.get('host', 'localhost')}"
-            twiml_base_url = f"{base_url}/outbound-call-twiml"
-            
-            call_requests = []
-            for recipient in valid_recipients:
-                params = {
-                    "client_name": recipient.client_name,
-                    "phone_number": recipient.number
-                }
-                twiml_url = f"{twiml_base_url}?{urlencode(params)}"
-                
-                call_requests.append({
-                    "to_number": recipient.number,
-                    "twiml_url": twiml_url,
-                    "client_name": recipient.client_name
-                })
-            
-            # Initiate calls sequentially
-            logger.info(f"[CSV Bulk Call] Initiating {len(call_requests)} calls sequentially")
-            results = await twilio_service.initiate_sequential_calls(call_requests)
-            
-            # Process results and broadcast to dashboard
+            call_requests = [
+                {"to_number": recipient.number, "client_name": recipient.client_name}
+                for recipient in valid_recipients
+            ]
+
+            logger.info("[CSV Bulk Call] Initiating %s calls sequentially via Retell", len(call_requests))
+            results = await RetellService.initiate_sequential_calls(call_requests)
+
             call_results: List[CallResult] = []
             successful = 0
             failed = 0
-            
+
             for result in results:
                 if result["success"]:
                     successful += 1
-                    call_sid = result["call_sid"]
-                    
-                    # Store metadata
-                    await CallRecordService.store_call_metadata(
-                        call_sid=call_sid,
-                        client_name=result["client_name"],
-                        phone_number=result["to_number"],
-                        call_type="outbound"
-                    )
-                    
-                    # Broadcast to dashboard
+                    call_id = result.get("call_id")
+                    call_sid = result.get("call_sid") or call_id
+
+                    if call_id:
+                        await CallRecordService.store_call_metadata(
+                            call_sid=call_id,
+                            client_name=result["client_name"],
+                            phone_number=result["to_number"],
+                            call_type="outbound",
+                        )
+                        await CallRecordService.link_conversation_to_call(call_id, call_id)
+
                     payload = {
                         "call_sid": call_sid,
+                        "call_id": call_id,
                         "client_name": result["client_name"],
                         "phone_number": result["to_number"],
-                        "status": result["status"],
+                        "status": result.get("status"),
                     }
                     await dashboard_manager.broadcast("call_in_progress", payload)
-                    
+
                     call_results.append(CallResult(
                         success=True,
                         call_sid=call_sid,
                         client_name=result["client_name"],
-                        phone_number=result["to_number"]
+                        phone_number=result["to_number"],
                     ))
                 else:
                     failed += 1

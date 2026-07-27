@@ -59,6 +59,7 @@ starlette==0.48.0
 tenacity==9.1.2
 tqdm==4.67.1
 twilio==9.8.3
+retell-sdk>=4.0.0
 typing-extensions==4.15.0
 typing-inspection==0.4.1
 urllib3==2.5.0
